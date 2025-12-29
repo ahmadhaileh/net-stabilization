@@ -807,15 +807,16 @@ svg.icon {
 /* Compact Grid Layout */
 .control-sections.compact-grid {
     padding: var(--space-3) var(--space-4);
-    display: grid;
-    grid-template-columns: auto 1fr auto;
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-3);
     align-items: center;
 }
 
 @media (max-width: 1200px) {
     .control-sections.compact-grid {
-        grid-template-columns: 1fr;
+        flex-direction: column;
+        align-items: stretch;
     }
 }
 
@@ -912,32 +913,35 @@ svg.icon {
 /* Compact Pool */
 .control-group.compact-pool {
     padding: var(--space-2) var(--space-3);
+    flex: 1;
+    min-width: 300px;
 }
 
 .pool-config-compact {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    flex-wrap: wrap;
 }
 
 .pool-config-compact .text-input {
     padding: var(--space-1) var(--space-2);
     font-size: 0.75rem;
+    flex-shrink: 1;
 }
 
 .pool-config-compact .text-input:first-child {
     flex: 2;
-    min-width: 200px;
+    min-width: 150px;
 }
 
 .pool-config-compact .text-input:nth-child(2) {
     flex: 1;
-    min-width: 120px;
+    min-width: 100px;
 }
 
 .pool-config-compact .text-input:nth-child(3) {
-    width: 60px;
+    width: 50px;
+    flex-shrink: 0;
 }
 
 .control-group h4 {

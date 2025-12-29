@@ -133,6 +133,10 @@ class DiscoveredMiner:
     
     # Config
     rated_power_watts: float = 3000.0  # Default, should be configured
+    current_frequency: Optional[int] = None  # Current frequency in MHz for power scaling
+    default_frequency: int = 550  # Default/full-power frequency for S9
+    min_frequency: int = 300  # Minimum safe frequency
+    max_frequency: int = 700  # Maximum safe frequency
     
     # Tracking
     last_seen: datetime = field(default_factory=datetime.utcnow)
@@ -389,10 +393,10 @@ class VnishWebAPI:
         """
         try:
             mode = "1" if enable else "0"
+            # Use GET with query params - Vnish CGI doesn't handle POST data well
             result = await self._request(
-                "/cgi-bin/do_sleep_mode.cgi",
-                method="POST",
-                data=f"mode={mode}"
+                f"/cgi-bin/do_sleep_mode.cgi?mode={mode}",
+                method="GET"
             )
             
             # Response is just "OK" on success
@@ -413,24 +417,22 @@ class VnishWebAPI:
         """
         Stop the cgminer process (put miner in idle/sleep mode).
         
-        Uses sleep mode API (same as Awesome Miner) for instant stop.
-        Falls back to legacy stop_bmminer.cgi if sleep mode fails.
+        Uses stop_bmminer.cgi for reliable stop.
+        Note: sleep mode API is unreliable on some Vnish versions.
         
         Returns:
             True if successful
         """
-        # Try sleep mode first (preferred - instant and clean)
+        # Use stop_bmminer.cgi directly - more reliable than sleep mode
         try:
-            if await self.set_sleep_mode(True):
+            result = await self._request("/cgi-bin/stop_bmminer.cgi")
+            if result.get("success") or result.get("response", "").lower() == "ok":
+                logger.info("Vnish: CGMiner stopped", host=self.host)
                 return True
-        except Exception as e:
-            logger.debug("Sleep mode failed, trying legacy stop", host=self.host, error=str(e))
-        
-        # Fallback to legacy stop_bmminer.cgi
-        try:
-            await self._request("/cgi-bin/stop_bmminer.cgi")
-            logger.info("Vnish: CGMiner stopped via legacy API", host=self.host)
-            return True
+            else:
+                logger.warning("Vnish: stop_bmminer returned unexpected response", 
+                              host=self.host, result=result)
+                return False
         except Exception as e:
             logger.error("Vnish: Failed to stop cgminer", host=self.host, error=str(e))
             return False
@@ -439,31 +441,24 @@ class VnishWebAPI:
         """
         Start/restart the cgminer process (resume mining from idle/sleep).
         
-        Uses sleep mode API (same as Awesome Miner) for instant wake.
-        Falls back to legacy reboot_cgminer.cgi if sleep mode fails.
+        Uses reboot_cgminer.cgi for reliable start.
+        Note: This endpoint blocks until cgminer starts, so we use short timeout.
         
         Returns:
             True if the request was sent successfully
         """
-        # Try sleep mode wake first (preferred - instant)
-        try:
-            if await self.set_sleep_mode(False):
-                return True
-        except Exception as e:
-            logger.debug("Sleep mode wake failed, trying legacy start", host=self.host, error=str(e))
-        
-        # Fallback to legacy reboot_cgminer.cgi
+        # Use reboot_cgminer.cgi directly - more reliable than sleep mode
         url = f"{self.base_url}/cgi-bin/reboot_cgminer.cgi"
         
         try:
-            # Use a short timeout - we don't need to wait for cgminer to start
+            # Use a short timeout - we don't need to wait for cgminer to fully start
             auth = httpx.DigestAuth(self.username, self.password)
             
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 try:
                     response = await client.get(url, auth=auth)
-                    if response.status_code in [200, 401]:
-                        logger.info("Vnish: CGMiner start command sent via legacy API", host=self.host)
+                    if response.status_code in [200]:
+                        logger.info("Vnish: CGMiner start command sent", host=self.host)
                         return True
                 except httpx.TimeoutException:
                     # Timeout is expected - the endpoint blocks until cgminer starts
@@ -1063,9 +1058,10 @@ class MinerDiscoveryService:
         # Extract summary info
         summary_data = summary.get("SUMMARY", [{}])[0]
         
-        # Common fields
-        miner.hashrate_ghs = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
-        miner.uptime_seconds = summary_data.get("Elapsed", 0)
+        # Common fields - CGMiner sometimes returns strings, so convert to float
+        hashrate_raw = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
+        miner.hashrate_ghs = float(hashrate_raw) if hashrate_raw else 0.0
+        miner.uptime_seconds = int(summary_data.get("Elapsed", 0) or 0)
         
         # Try to get version for model info
         try:
@@ -1228,8 +1224,10 @@ class MinerDiscoveryService:
             summary = await api.get_summary()
             summary_data = summary.get("SUMMARY", [{}])[0]
             
-            miner.hashrate_ghs = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
-            miner.uptime_seconds = summary_data.get("Elapsed", 0)
+            # CGMiner sometimes returns strings, so convert to float
+            hashrate_raw = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
+            miner.hashrate_ghs = float(hashrate_raw) if hashrate_raw else 0.0
+            miner.uptime_seconds = int(summary_data.get("Elapsed", 0) or 0)
             miner.is_online = True
             miner.last_seen = datetime.utcnow()
             miner.consecutive_failures = 0
@@ -1548,6 +1546,92 @@ class MinerDiscoveryService:
         except Exception as e:
             logger.error("Failed to enable pools", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
+    
+    async def set_miner_frequency(
+        self,
+        miner_id: str,
+        frequency: int
+    ) -> Tuple[bool, str]:
+        """
+        Set miner frequency for power scaling.
+        
+        This allows proportional power control by adjusting frequency.
+        Lower frequency = lower power consumption (and hashrate).
+        
+        For S9 miners, typical frequency range is ~300-700 MHz.
+        Power consumption scales roughly linearly with frequency.
+        
+        Args:
+            miner_id: The miner to configure
+            frequency: Target frequency in MHz (e.g., 550)
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        miner = self._miners.get(miner_id)
+        if not miner:
+            return False, f"Miner {miner_id} not found"
+        
+        vnish = VnishWebAPI(miner.ip)
+        
+        try:
+            if not await vnish.is_vnish_available():
+                return False, "Vnish Web API not available - frequency control requires Vnish firmware"
+            
+            result = await vnish.set_vnish_profile(frequency=str(frequency))
+            
+            if result.get("success") or result.get("status") == 200:
+                # Store the frequency setting on the miner object
+                miner.current_frequency = frequency
+                logger.info(
+                    "Miner frequency set",
+                    miner_id=miner_id,
+                    ip=miner.ip,
+                    frequency=frequency
+                )
+                return True, f"Frequency set to {frequency} MHz"
+            else:
+                return False, f"Failed to set frequency: {result}"
+                
+        except Exception as e:
+            logger.error(
+                "Failed to set miner frequency",
+                miner_id=miner_id,
+                ip=miner.ip,
+                error=str(e)
+            )
+            return False, f"Error: {e}"
+    
+    async def get_miner_frequency(self, miner_id: str) -> Optional[int]:
+        """
+        Get current miner frequency.
+        
+        Args:
+            miner_id: The miner to query
+            
+        Returns:
+            Current frequency in MHz, or None if unavailable
+        """
+        miner = self._miners.get(miner_id)
+        if not miner:
+            return None
+        
+        vnish = VnishWebAPI(miner.ip)
+        
+        try:
+            if not await vnish.is_vnish_available():
+                return None
+            
+            config = await vnish.get_miner_config()
+            freq_str = config.get("bitmain-freq", "")
+            
+            if freq_str:
+                return int(freq_str)
+            return None
+            
+        except Exception as e:
+            logger.debug("Failed to get miner frequency", miner_id=miner_id, error=str(e))
+            return None
     
     # =========================================================================
     # Manual Miner Management

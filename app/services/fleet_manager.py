@@ -10,7 +10,7 @@ This module handles:
 """
 import asyncio
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 import structlog
 
@@ -436,35 +436,204 @@ class FleetManager:
             return False, f"Activation failed: {str(e)}"
     
     async def _activate_fleet_direct(self, target_power_kw: float) -> tuple[bool, str]:
-        """Activate miners using direct communication (resume from idle)."""
-        # Get miners currently in idle/stopped state
-        idle_miners = [
-            m for m in self.discovery.miners
-            if m.is_online and not m.is_mining
-        ]
+        """
+        Activate miners using direct communication with proportional power control.
         
-        if not idle_miners:
-            self._status.state = FleetState.RUNNING
-            return True, "All miners already active"
+        Strategy:
+        1. Calculate how many miners to turn on to meet target power
+        2. Turn on/off miners as needed (coarse control)
+        3. Frequency scaling for fine control is applied separately after miners stabilize
         
-        # Calculate which miners to activate based on power target
-        miners_to_activate = self._select_miners_for_power(idle_miners, target_power_kw)
+        For S9 miners: each is ~1.4 kW at full power.
+        - If target is 1.0 kW and we have 2 miners, turn on 1 miner
+        - If target is 2.0 kW, turn on 2 miners
+        - Fine-grained control via frequency is optional enhancement
+        """
+        all_miners = [m for m in self.discovery.miners if m.is_online]
         
-        # Activate selected miners (resume from idle)
+        if not all_miners:
+            return False, "No online miners available"
+        
+        # Sort miners by rated power (smallest first for better granularity)
+        sorted_miners = sorted(all_miners, key=lambda m: m.rated_power_kw)
+        
+        # Get currently mining miners
+        currently_mining = {m.id for m in all_miners if m.is_mining}
+        
+        logger.info(
+            "Proportional power activation",
+            target_kw=target_power_kw,
+            total_miners=len(all_miners),
+            currently_mining=len(currently_mining)
+        )
+        
+        # Calculate which miners should be on/off to hit target
+        # Strategy: Add miners until we reach or exceed target, but don't overshoot
+        # by more than 50% of the last miner's power
+        cumulative_power = 0.0
+        miners_to_activate = []
+        miners_to_deactivate = []
+        
+        for miner in sorted_miners:
+            # Check if adding this miner would overshoot significantly
+            power_after_adding = cumulative_power + miner.rated_power_kw
+            
+            if cumulative_power >= target_power_kw:
+                # Already at or above target - turn off remaining miners
+                if miner.id in currently_mining:
+                    miners_to_deactivate.append(miner)
+            elif power_after_adding <= target_power_kw * 1.2:
+                # Adding this miner keeps us within 20% of target - activate it
+                miners_to_activate.append(miner)
+                cumulative_power = power_after_adding
+            elif cumulative_power == 0:
+                # No miners yet - must activate at least one if any power requested
+                miners_to_activate.append(miner)
+                cumulative_power = power_after_adding
+            else:
+                # Adding this miner would overshoot too much
+                # Check if we're closer to target with or without it
+                undershoot = target_power_kw - cumulative_power
+                overshoot = power_after_adding - target_power_kw
+                
+                if overshoot < undershoot:
+                    # Overshooting is closer to target - activate
+                    miners_to_activate.append(miner)
+                    cumulative_power = power_after_adding
+                else:
+                    # Stay under target - don't activate, turn off if running
+                    if miner.id in currently_mining:
+                        miners_to_deactivate.append(miner)
+        
+        # Apply changes
         success_count = 0
+        total_changes = 0
+        
+        # Turn ON miners that should be active but aren't
         for miner in miners_to_activate:
-            ok, msg = await self.discovery.set_miner_active(miner.id)
+            if miner.id not in currently_mining:
+                total_changes += 1
+                ok, msg = await self.discovery.set_miner_active(miner.id)
+                if ok:
+                    success_count += 1
+                    logger.info("Miner activated", miner_id=miner.id, ip=miner.ip)
+                else:
+                    logger.warning("Failed to activate miner", miner_id=miner.id, error=msg)
+        
+        # Turn OFF miners that should be idle
+        for miner in miners_to_deactivate:
+            total_changes += 1
+            ok, msg = await self.discovery.set_miner_idle(miner.id)
             if ok:
                 success_count += 1
-                logger.info("Miner activated", miner_id=miner.id, ip=miner.ip)
+                logger.info("Miner set to idle", miner_id=miner.id, ip=miner.ip)
             else:
-                logger.warning("Failed to activate miner", miner_id=miner.id, error=msg)
+                logger.warning("Failed to idle miner", miner_id=miner.id, error=msg)
+        
+        if total_changes == 0:
+            # No changes needed - miners already in correct state
+            self._status.state = FleetState.RUNNING
+            return True, f"Fleet already at target power (~{cumulative_power:.1f} kW)"
         
         if success_count == 0:
-            return False, "Failed to activate any miners"
+            return False, "Failed to apply any power changes"
         
         self._status.state = FleetState.RUNNING
-        return True, f"Activated {success_count}/{len(miners_to_activate)} miners"
+        estimated_power = sum(m.rated_power_kw for m in miners_to_activate)
+        return True, f"Activated {len(miners_to_activate)} miners for ~{estimated_power:.1f} kW (target: {target_power_kw:.1f} kW)"
+    
+    def _calculate_proportional_power(
+        self,
+        miners: List[DiscoveredMiner],
+        target_power_kw: float
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Calculate power allocation for each miner to hit target power.
+        
+        Strategy:
+        1. First, determine how many miners need to be on (full power miners)
+        2. Use one "swing" miner with frequency scaling for fine adjustment
+        3. Keep remaining miners off
+        
+        Returns:
+            Dict mapping miner_id to {"action": str, "frequency": int}
+        """
+        allocation = {}
+        
+        if not miners:
+            return allocation
+        
+        # Sort miners by rated power (smallest first for better granularity)
+        sorted_miners = sorted(miners, key=lambda m: m.rated_power_kw)
+        
+        remaining_power = target_power_kw
+        
+        for i, miner in enumerate(sorted_miners):
+            if remaining_power <= 0:
+                # Target reached, turn off remaining miners
+                if miner.is_mining:
+                    allocation[miner.id] = {"action": "turn_off"}
+                continue
+            
+            # Full power of this miner
+            full_power = miner.rated_power_kw
+            
+            # Can we fit this miner fully?
+            if remaining_power >= full_power:
+                # Turn on at full power
+                if not miner.is_mining:
+                    allocation[miner.id] = {
+                        "action": "turn_on",
+                        "frequency": miner.default_frequency
+                    }
+                elif miner.current_frequency and miner.current_frequency != miner.default_frequency:
+                    # Already mining but at reduced frequency - restore full power
+                    allocation[miner.id] = {
+                        "action": "scale_frequency",
+                        "frequency": miner.default_frequency
+                    }
+                remaining_power -= full_power
+                
+            elif remaining_power > 0:
+                # This is the "swing" miner - use frequency scaling
+                # Calculate required frequency to achieve remaining power
+                power_ratio = remaining_power / full_power
+                
+                # Frequency scales roughly linearly with power
+                # Map power ratio to frequency range
+                freq_range = miner.max_frequency - miner.min_frequency
+                target_freq = int(miner.min_frequency + (power_ratio * freq_range))
+                
+                # Clamp to valid range
+                target_freq = max(miner.min_frequency, min(miner.max_frequency, target_freq))
+                
+                if not miner.is_mining:
+                    allocation[miner.id] = {
+                        "action": "turn_on",
+                        "frequency": target_freq
+                    }
+                else:
+                    allocation[miner.id] = {
+                        "action": "scale_frequency",
+                        "frequency": target_freq
+                    }
+                
+                logger.info(
+                    "Swing miner frequency calculated",
+                    miner_id=miner.id,
+                    target_power=remaining_power,
+                    power_ratio=power_ratio,
+                    target_freq=target_freq
+                )
+                
+                remaining_power = 0  # Swing miner handles the rest
+                
+            else:
+                # No more power needed, turn off if running
+                if miner.is_mining:
+                    allocation[miner.id] = {"action": "turn_off"}
+        
+        return allocation
     
     async def _activate_fleet_awesomeminer(self, target_power_kw: float) -> tuple[bool, str]:
         """Activate miners using AwesomeMiner API (legacy)."""
