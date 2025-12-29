@@ -1,0 +1,45 @@
+services:
+    net-stabilization:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: net-stabilization
+        restart: unless-stopped
+        ports:
+            - '${HOST_PORT:-8080}:8080'
+        environment:
+            - AWESOME_MINER_HOST=${AWESOME_MINER_HOST:-host.docker.internal}
+            - AWESOME_MINER_PORT=${AWESOME_MINER_PORT:-17790}
+            - AWESOME_MINER_API_KEY=${AWESOME_MINER_API_KEY:-}
+            - LOG_LEVEL=${LOG_LEVEL:-INFO}
+            - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}
+            - DATABASE_URL=sqlite+aiosqlite:///./data/netstab.db
+            - MIN_POWER_THRESHOLD_KW=${MIN_POWER_THRESHOLD_KW:-1.0}
+            - POWER_RAMP_RATE_KW_PER_SEC=${POWER_RAMP_RATE_KW_PER_SEC:-50.0}
+        volumes:
+            - ./data:/app/data
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        networks:
+            - miner-network
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 10s
+        logging:
+            driver: 'json-file'
+            options:
+                max-size: '10m'
+                max-file: '3'
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                reservations:
+                    memory: 128M
+
+networks:
+    miner-network:
+        driver: bridge

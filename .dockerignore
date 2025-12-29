@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.eggs/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+.env
+.env.local
+*.log
+data/*.db
+data/*.sqlite
+
+# Testing
+tests/
+pytest.ini
+
+# Documentation
+*.md
+!README.md
+
+# Scripts not needed in container
+scripts/
+run_dev.sh
+setup_prod.sh
+*.service
