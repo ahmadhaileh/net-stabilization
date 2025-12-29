@@ -120,9 +120,52 @@ class FleetManager:
             logger.info("Running initial miner discovery...")
             await self.run_discovery()
             
+            # Idle all miners on startup if configured
+            if self.settings.idle_all_on_startup:
+                logger.info("Idling all miners on startup (default standby mode)...")
+                await self.idle_all_miners()
+            
             # Start periodic discovery
             if self._discovery_task is None or self._discovery_task.done():
                 self._discovery_task = asyncio.create_task(self._discovery_loop())
+    
+    async def idle_all_miners(self) -> tuple[bool, str]:
+        """
+        Put ALL miners into idle mode.
+        
+        This is used on startup to ensure fleet starts in standby mode.
+        EMS signals will then activate the appropriate number of miners.
+        
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self._use_direct_mode:
+            return False, "Idle all only supported in direct mode"
+        
+        all_miners = list(self.discovery.miners)
+        if not all_miners:
+            return True, "No miners to idle"
+        
+        success_count = 0
+        total_count = 0
+        
+        for miner in all_miners:
+            if miner.is_mining:
+                total_count += 1
+                ok, msg = await self.discovery.set_miner_idle(miner.id)
+                if ok:
+                    success_count += 1
+                    logger.info("Miner idled on startup", miner_id=miner.id, ip=miner.ip)
+                else:
+                    logger.warning("Failed to idle miner on startup", miner_id=miner.id, error=msg)
+        
+        self._status.state = FleetState.STANDBY
+        self._target_power_kw = None
+        
+        if total_count == 0:
+            return True, "All miners already idle"
+        
+        return True, f"Idled {success_count}/{total_count} miners on startup"
     
     async def stop_polling(self):
         """Stop background status polling and discovery."""

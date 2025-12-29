@@ -382,8 +382,10 @@ class VnishWebAPI:
         """
         Set miner sleep mode using the do_sleep_mode.cgi endpoint.
         
-        This is the same method Awesome Miner uses to pause/resume miners.
-        It's faster and more reliable than stopping/restarting cgminer.
+        Per Vnish API docs:
+        POST /cgi-bin/do_sleep_mode.cgi
+        Content-Type: application/x-www-form-urlencoded
+        mode=1 (sleep) or mode=0 (wake)
         
         Args:
             enable: True to enter sleep mode (pause), False to wake (resume)
@@ -391,22 +393,29 @@ class VnishWebAPI:
         Returns:
             True if successful
         """
+        url = f"{self.base_url}/cgi-bin/do_sleep_mode.cgi"
+        mode = "1" if enable else "0"
+        
         try:
-            mode = "1" if enable else "0"
-            # Use GET with query params - Vnish CGI doesn't handle POST data well
-            result = await self._request(
-                f"/cgi-bin/do_sleep_mode.cgi?mode={mode}",
-                method="GET"
-            )
+            auth = httpx.DigestAuth(self.username, self.password)
             
-            # Response is just "OK" on success
-            if result.get("success") or result.get("response") == "OK":
-                action = "enabled" if enable else "disabled"
-                logger.info(f"Vnish: Sleep mode {action}", host=self.host)
-                return True
-            else:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    url,
+                    auth=auth,
+                    data={"mode": mode},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                
+                if response.status_code == 200:
+                    resp_text = response.text.strip().lower()
+                    if resp_text == "ok" or "success" in resp_text or response.status_code == 200:
+                        action = "enabled" if enable else "disabled"
+                        logger.info(f"Vnish: Sleep mode {action}", host=self.host)
+                        return True
+                
                 logger.warning("Vnish: Sleep mode command returned unexpected response", 
-                             host=self.host, result=result)
+                             host=self.host, status=response.status_code, response=response.text[:100])
                 return False
                 
         except Exception as e:
@@ -611,6 +620,69 @@ class VnishWebAPI:
     # =========================================================================
     # Vnish V3 API - Chip Hashrate & Tuning Logs
     # =========================================================================
+
+    async def set_find_mode(self, enable: bool) -> Tuple[bool, str]:
+        """
+        Set the miner's find mode (LED blinking) on or off.
+        
+        Uses the Vnish find_mode.cgi endpoint which activates/deactivates
+        the miner's LED blinking mode (same as "Find Miner" button in web UI).
+        
+        Args:
+            enable: True to enable find mode, False to disable
+            
+        Returns:
+            Tuple of (success, response_text)
+        """
+        try:
+            url = f"{self.base_url}/cgi-bin/find_mode.cgi"
+            mode_value = "1" if enable else "0"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    data=f"mode={mode_value}",
+                    auth=httpx.DigestAuth(self.username, self.password),
+                    timeout=self.timeout,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                result = response.text
+                # Response is "Enabled" or "Disabled"
+                success = response.status_code == 200 and result.strip() in ["Enabled", "Disabled"]
+                if success:
+                    logger.info("Vnish: Find mode set", host=self.host, enabled=enable, response=result.strip())
+                else:
+                    logger.warning("Vnish: Find mode failed", host=self.host, response=result)
+                return success, result.strip()
+            
+        except Exception as e:
+            logger.error("Vnish: Failed to set find mode", host=self.host, error=str(e))
+            return False, str(e)
+
+    async def blink_led(self, duration_seconds: int = 30) -> bool:
+        """
+        Blink the miner's LED to help locate it physically (timed).
+        
+        Uses the Vnish find_mode.cgi endpoint which activates
+        the miner's LED blinking mode, then auto-disables after duration.
+        
+        Args:
+            duration_seconds: How long to blink (default 30 seconds)
+            
+        Returns:
+            True if the blink was started successfully
+        """
+        success, _ = await self.set_find_mode(enable=True)
+        if not success:
+            return False
+            
+        # Schedule automatic disable after duration
+        async def disable_find_mode():
+            await asyncio.sleep(duration_seconds)
+            await self.set_find_mode(enable=False)
+        
+        asyncio.create_task(disable_find_mode())
+        return True
     
     async def get_chip_hashrate(self) -> Dict[str, Any]:
         """
@@ -1366,7 +1438,10 @@ class MinerDiscoveryService:
     
     async def restart_miner(self, miner_id: str) -> Tuple[bool, str]:
         """
-        Restart a miner.
+        Soft restart a miner (restart cgminer software only).
+        
+        This is a quick restart that just restarts the mining software
+        without rebooting the entire system.
         
         Args:
             miner_id: The miner to restart
@@ -1378,6 +1453,17 @@ class MinerDiscoveryService:
         if not miner:
             return False, f"Miner {miner_id} not found"
         
+        # Try Vnish Web API first for more reliable restart
+        vnish = VnishWebAPI(miner.ip)
+        try:
+            if await vnish.is_vnish_available():
+                if await vnish.start_cgminer():
+                    logger.info("Miner soft restart via Vnish API", miner_id=miner_id, ip=miner.ip)
+                    return True, "CGMiner restart initiated via Vnish API"
+        except Exception as e:
+            logger.debug("Vnish restart failed, trying CGMiner API", error=str(e))
+        
+        # Fallback to CGMiner API
         api = CGMinerAPI(miner.ip, miner.port, timeout=self.api_timeout)
         
         try:
@@ -1388,6 +1474,152 @@ class MinerDiscoveryService:
             logger.error("Failed to restart miner", miner_id=miner_id, error=str(e))
             return False, f"Restart failed: {e}"
     
+    async def reboot_miner(self, miner_id: str) -> Tuple[bool, str]:
+        """
+        Full system reboot of a miner.
+        
+        This reboots the entire system, not just the mining software.
+        Takes approximately 60-90 seconds to complete.
+        
+        Args:
+            miner_id: The miner to reboot
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        miner = self._miners.get(miner_id)
+        if not miner:
+            return False, f"Miner {miner_id} not found"
+        
+        vnish = VnishWebAPI(miner.ip)
+        
+        try:
+            if await vnish.reboot_system():
+                logger.info("Miner full reboot initiated", miner_id=miner_id, ip=miner.ip)
+                return True, "System reboot initiated (takes ~60-90 seconds)"
+            else:
+                return False, "Reboot command failed"
+        except Exception as e:
+            logger.error("Failed to reboot miner", miner_id=miner_id, ip=miner.ip, error=str(e))
+            return False, f"Reboot failed: {e}"
+
+    async def blink_miner(self, miner_ip: str) -> Tuple[bool, str]:
+        """
+        Toggle a miner's find mode (LED blinking) on or off.
+        
+        Since the miner doesn't provide a way to query current state,
+        we track it locally and toggle between on/off.
+        
+        Args:
+            miner_ip: IP address of the miner
+            
+        Returns:
+            Tuple of (success, message, is_enabled)
+        """
+        # Find miner by IP
+        miner = None
+        for m in self._miners.values():
+            if m.ip == miner_ip:
+                miner = m
+                break
+        
+        if not miner:
+            return False, f"Miner at {miner_ip} not found", False
+        
+        vnish = VnishWebAPI(miner_ip)
+        
+        try:
+            # Track find mode state per miner (default to False/off)
+            if not hasattr(self, '_find_mode_states'):
+                self._find_mode_states = {}
+            
+            current_state = self._find_mode_states.get(miner_ip, False)
+            new_state = not current_state
+            
+            success, response = await vnish.set_find_mode(enable=new_state)
+            
+            if success:
+                self._find_mode_states[miner_ip] = new_state
+                return True, response, new_state
+            else:
+                return False, f"Failed: {response}", current_state
+                
+        except Exception as e:
+            logger.error("Failed to toggle miner find mode", ip=miner_ip, error=str(e))
+            return False, f"Toggle failed: {e}", False
+    
+    async def factory_reset_miner(self, miner_id: str) -> Tuple[bool, str]:
+        """
+        Factory reset a miner to default configuration.
+        
+        This resets the miner configuration to defaults including:
+        - Default pool settings (cleared)
+        - Default frequency/voltage settings
+        - Default fan settings
+        
+        Note: Network settings are NOT reset, only mining config.
+        
+        Args:
+            miner_id: The miner to reset
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        miner = self._miners.get(miner_id)
+        if not miner:
+            return False, f"Miner {miner_id} not found"
+        
+        vnish = VnishWebAPI(miner.ip)
+        
+        try:
+            if not await vnish.is_vnish_available():
+                return False, "Vnish Web API not available - factory reset requires Vnish firmware"
+            
+            # Reset to default Vnish config
+            # Clear pools and set default mining parameters
+            default_config = {
+                # Clear all pools
+                "_ant_pool1url": "",
+                "_ant_pool1user": "",
+                "_ant_pool1pw": "",
+                "_ant_pool2url": "",
+                "_ant_pool2user": "",
+                "_ant_pool2pw": "",
+                "_ant_pool3url": "",
+                "_ant_pool3user": "",
+                "_ant_pool3pw": "",
+                # Default mining settings for S9
+                "_ant_freq": "550",
+                "_ant_voltage": "8.8",
+                "_ant_fan_customize_switch": "false",
+                "_ant_fan_customize_value": "100",
+                "_ant_fan_rpm_off": "0",
+                "_ant_target_temp": "75",
+                "_ant_tempoff": "105",
+                "_ant_asicboost": "true",
+                "_ant_nobeeper": "false",
+                "_ant_notempoverctrl": "false",
+                # Auto-downscale settings
+                "_ant_autodownscale_timer": "2",
+                "_ant_autodownscale_after": "10",
+                "_ant_autodownscale_step": "25",
+                "_ant_autodownscale_min": "400",
+                "_ant_autodownscale_prec": "75",
+                "_ant_autodownscale_profile": "1",
+            }
+            
+            result = await vnish._post_config("/cgi-bin/set_miner_conf_custom.cgi", default_config)
+            
+            if result.get("success") or result.get("status") == 200:
+                logger.info("Miner factory reset completed", miner_id=miner_id, ip=miner.ip)
+                return True, "Factory reset completed - pools cleared, default settings restored"
+            else:
+                return False, f"Factory reset failed: {result}"
+                
+        except Exception as e:
+            logger.error("Failed to factory reset miner", miner_id=miner_id, ip=miner.ip, error=str(e))
+            return False, f"Factory reset failed: {e}"
+
     async def _set_whatsminer_power_mode(
         self,
         miner: DiscoveredMiner,
@@ -1425,126 +1657,59 @@ class MinerDiscoveryService:
     
     async def _disable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Disable mining by stopping cgminer via Vnish Web API.
+        Put miner into idle mode using Vnish sleep mode API.
         
-        For Antminer with Vnish firmware, we use the Web API to stop cgminer
-        completely. This is more reliable than CGMiner API pool disable.
+        This uses the do_sleep_mode.cgi endpoint which is the safest way
+        to pause mining - it preserves all config and pools.
         
-        Falls back to CGMiner API restart for non-Vnish firmware.
+        NO fallback to CGMiner API pool manipulation - that breaks configs!
         """
-        # Try Vnish Web API first (most reliable for Vnish firmware)
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            # Check if Vnish web API is available
-            if await vnish.is_vnish_available():
-                logger.info("Using Vnish Web API to stop miner", ip=miner.ip)
-                
-                if await vnish.stop_cgminer():
-                    miner.power_mode = MinerPowerMode.IDLE
-                    miner.is_mining = False
-                    miner.hashrate_ghs = 0
-                    logger.info("Miner stopped via Vnish API", ip=miner.ip)
-                    return True, "CGMiner stopped via Vnish Web API"
-                else:
-                    logger.warning("Vnish stop_cgminer failed", ip=miner.ip)
-                    # Fall through to CGMiner API method
-        except Exception as e:
-            logger.debug("Vnish API not available", ip=miner.ip, error=str(e))
-        
-        # Fallback: CGMiner API method (less reliable for Vnish)
-        api = CGMinerAPI(miner.ip, miner.port, timeout=self.api_timeout)
-        
-        try:
-            # Get current pools first
-            pools_resp = await api.get_pools()
-            pools = pools_resp.get("POOLS", [])
+            logger.info("Setting miner to sleep mode", ip=miner.ip)
             
-            # Store original pool config for re-enabling
-            if pools and not hasattr(miner, '_saved_pools'):
-                miner._saved_pools = []
-                for p in pools:
-                    if p.get("URL"):
-                        miner._saved_pools.append({
-                            "url": p.get("URL", ""),
-                            "user": p.get("User", ""),
-                            "pool_id": p.get("POOL", 0)
-                        })
-            
-            # Disable each pool
-            success_count = 0
-            for pool in pools:
-                pool_id = pool.get("POOL", 0)
-                try:
-                    result = await api.send_command("disablepool", str(pool_id))
-                    if result.get("STATUS", [{}])[0].get("STATUS") == "S":
-                        success_count += 1
-                except Exception:
-                    pass
-            
-            miner.power_mode = MinerPowerMode.IDLE
-            miner.is_mining = False
-            logger.info("Miner set to idle via CGMiner API", ip=miner.ip, pools_disabled=success_count)
-            return True, f"Pools disabled ({success_count} pools)"
+            # Use sleep mode API directly - don't check is_vnish_available
+            # because that might fail if CGMiner is already in a weird state
+            if await vnish.set_sleep_mode(enable=True):
+                miner.power_mode = MinerPowerMode.IDLE
+                miner.is_mining = False
+                miner.hashrate_ghs = 0
+                logger.info("Miner entered sleep mode", ip=miner.ip)
+                return True, "Miner entered sleep mode"
+            else:
+                logger.warning("Sleep mode command failed", ip=miner.ip)
+                return False, "Failed to set sleep mode"
                 
         except Exception as e:
-            logger.error("Failed to disable pools", ip=miner.ip, error=str(e))
+            logger.error("Failed to set sleep mode", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def _enable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Re-enable mining by starting cgminer via Vnish Web API.
+        Wake miner from sleep mode using Vnish sleep mode API.
         
-        For Antminer with Vnish firmware, we use the Web API to restart cgminer.
-        Falls back to CGMiner API pool enable for non-Vnish firmware.
+        This uses the do_sleep_mode.cgi endpoint with mode=0 which
+        instantly wakes the miner and resumes mining (10-15 seconds).
         """
-        # Try Vnish Web API first (most reliable for Vnish firmware)
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            # Check if Vnish web API is available
-            if await vnish.is_vnish_available():
-                logger.info("Using Vnish Web API to start miner", ip=miner.ip)
-                
-                if await vnish.start_cgminer():
-                    miner.power_mode = MinerPowerMode.NORMAL
-                    miner.is_mining = True  # Will be confirmed on next status update
-                    logger.info("Miner started via Vnish API", ip=miner.ip)
-                    return True, "CGMiner started via Vnish Web API - resuming mining"
-                else:
-                    logger.warning("Vnish start_cgminer failed", ip=miner.ip)
-                    # Fall through to CGMiner API method
-        except Exception as e:
-            logger.debug("Vnish API not available", ip=miner.ip, error=str(e))
-        
-        # Fallback: CGMiner API method
-        api = CGMinerAPI(miner.ip, miner.port, timeout=self.api_timeout)
-        
-        try:
-            # Get current pools
-            pools_resp = await api.get_pools()
-            pools = pools_resp.get("POOLS", [])
+            logger.info("Waking miner from sleep mode", ip=miner.ip)
             
-            # Enable each pool
-            success_count = 0
-            for pool in pools:
-                pool_id = pool.get("POOL", 0)
-                try:
-                    result = await api.send_command("enablepool", str(pool_id))
-                    if result.get("STATUS", [{}])[0].get("STATUS") == "S":
-                        success_count += 1
-                except Exception:
-                    pass
-            
-            if success_count > 0:
+            # Use sleep mode API directly to wake - don't check is_vnish_available
+            # because that calls get_system_info which might fail when sleeping
+            if await vnish.set_sleep_mode(enable=False):
                 miner.power_mode = MinerPowerMode.NORMAL
-                logger.info("Miner pools enabled", ip=miner.ip, enabled=success_count)
-                return True, f"Enabled {success_count} pools - miner resuming"
+                miner.is_mining = True  # Will be confirmed on next status update
+                logger.info("Miner woke from sleep mode", ip=miner.ip)
+                return True, "Miner woke from sleep - resuming mining"
             else:
-                return False, "Failed to enable any pools"
+                logger.warning("Wake from sleep command failed", ip=miner.ip)
+                return False, "Failed to wake from sleep"
                 
         except Exception as e:
-            logger.error("Failed to enable pools", ip=miner.ip, error=str(e))
+            logger.error("Failed to wake from sleep", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def set_miner_frequency(

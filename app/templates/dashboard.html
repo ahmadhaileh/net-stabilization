@@ -21,7 +21,6 @@
         </svg>
         Net Stabilization
       </h1>
-      <span class="mode-badge" id="mode-badge">Direct Mode</span>
     </div>
     <div class="header-right">
       <div class="header-stat">
@@ -163,89 +162,62 @@
       </section>
     </div>
 
-    <!-- Control Panel -->
-    <section class="control-panel compact">
-      <div class="control-header">
+    <!-- Historical Graphs Section - Now above Fleet Control -->
+    <section class="graphs-section">
+      <div class="section-header">
         <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-            <line x1="8" y1="21" x2="16" y2="21" />
-            <line x1="12" y1="17" x2="12" y2="21" />
-          </svg> Fleet Control</h2>
-        <div id="override-badge" class="override-badge hidden">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span>Manual Override Active</span>
+            <line x1="18" y1="20" x2="18" y2="10" />
+            <line x1="12" y1="20" x2="12" y2="4" />
+            <line x1="6" y1="20" x2="6" y2="14" />
+          </svg> Historical Data</h2>
+        <div class="graph-controls">
+          <div class="time-scope-buttons">
+            <button class="scope-btn" data-scope="5m">5M</button>
+            <button class="scope-btn" data-scope="15m">15M</button>
+            <button class="scope-btn" data-scope="1h">1H</button>
+            <button class="scope-btn" data-scope="6h">6H</button>
+            <button class="scope-btn" data-scope="24h">24H</button>
+          </div>
+          <select id="graph-miner-select" class="miner-select">
+            <option value="fleet">Entire Fleet</option>
+          </select>
         </div>
       </div>
-
-      <div class="control-sections compact-grid">
-        <!-- Quick Actions - Compact -->
-        <div class="control-group compact-actions">
-          <div class="compact-row">
-            <button id="btn-idle-all" class="btn btn-warning">
-              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
-              Idle All
-            </button>
-            <button id="btn-resume-all" class="btn btn-success">
-              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="5 3 19 12 5 21 5 3" />
-              </svg>
-              Resume All
-            </button>
-            <button id="btn-emergency" class="btn btn-danger">
-              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              </svg>
-              Emergency Stop
-            </button>
-            <div class="override-toggle-inline">
-              <label class="toggle-switch small">
-                <input type="checkbox" id="override-toggle">
-                <span class="toggle-slider"></span>
-              </label>
-              <span class="override-label">Manual Override</span>
-            </div>
+      <div class="graphs-grid">
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Hashrate</span>
+            <span class="graph-value" id="graph-hashrate-current">-- TH/s</span>
           </div>
+          <div class="graph-container">
+            <canvas id="hashrate-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="hashrate-empty">Collecting data...</div>
         </div>
-
-        <!-- Power Target - Compact -->
-        <div class="control-group compact-power">
-          <div class="compact-power-row">
-            <div class="power-slider-mini">
-              <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0">
-              <div class="slider-labels-mini">
-                <span>0</span>
-                <span id="slider-value">0.0 kW</span>
-                <span id="slider-max">Max</span>
-              </div>
-            </div>
-            <div class="power-input-mini">
-              <input type="number" id="power-input" class="power-input" placeholder="0.0" min="0" step="0.1">
-              <span class="input-unit">kW</span>
-            </div>
-            <button id="btn-set-power" class="btn btn-primary">Set</button>
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Power Consumption</span>
+            <span class="graph-value" id="graph-power-current">-- kW</span>
           </div>
+          <div class="graph-container">
+            <canvas id="power-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="power-empty">Collecting data...</div>
         </div>
-
-        <!-- Pool Configuration - Compact -->
-        <div class="control-group compact-pool">
-          <div class="pool-config-compact">
-            <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333">
-            <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1">
-            <input type="text" id="pool-password" class="text-input" placeholder="x" value="x">
-            <button id="btn-update-pool-all" class="btn btn-primary">Update All</button>
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Temperature</span>
+            <span class="graph-value" id="graph-temp-current">-- °C</span>
           </div>
+          <div class="graph-container">
+            <canvas id="temp-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="temp-empty">Collecting data...</div>
         </div>
       </div>
     </section>
 
-    <!-- Discovery Section -->
+    <!-- Discovery Section - Now between Charts and Fleet Control -->
     <section class="discovery-section">
       <div class="section-header">
         <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -255,7 +227,7 @@
         <div class="discovery-info">
           <span class="info-item">
             <span class="info-label">Network:</span>
-            <span id="network-cidr" class="info-value">192.168.1.0/24</span>
+            <span id="network-cidr" class="info-value">--</span>
           </span>
           <span class="info-item">
             <span class="info-label">Last Scan:</span>
@@ -274,8 +246,6 @@
           Scan Network
         </button>
         <div class="add-miner-form">
-          <input type="text" id="add-miner-ip" placeholder="192.168.1.167">
-          <input type="number" id="add-miner-power" placeholder="1400" value="1400">
           <button id="btn-add-miner" class="btn btn-secondary">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -283,6 +253,84 @@
             </svg>
             Add Miner
           </button>
+          <input type="text" id="add-miner-ip" placeholder="IP Address">
+          <input type="number" id="add-miner-power" placeholder="Watts" value="1400">
+        </div>
+      </div>
+    </section>
+
+    <!-- Control Panel -->
+    <section class="control-panel compact">
+      <div class="control-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+            <line x1="8" y1="21" x2="16" y2="21" />
+            <line x1="12" y1="17" x2="12" y2="21" />
+          </svg> Fleet Control</h2>
+        <div id="override-badge" class="override-badge hidden">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>Manual Override Active</span>
+        </div>
+      </div>
+
+      <div class="control-sections fleet-control-rows">
+        <!-- Row 1: Quick Actions -->
+        <div class="control-row actions-row">
+          <button id="btn-idle-all" class="btn btn-warning">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="4" width="4" height="16" />
+              <rect x="14" y="4" width="4" height="16" />
+            </svg>
+            Idle All
+          </button>
+          <button id="btn-resume-all" class="btn btn-success">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Resume All
+          </button>
+          <button id="btn-emergency" class="btn btn-danger">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            </svg>
+            Emergency Stop
+          </button>
+          <div class="override-toggle-inline">
+            <label class="toggle-switch small">
+              <input type="checkbox" id="override-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="override-label">Manual Override</span>
+          </div>
+        </div>
+
+        <!-- Row 2: Pool Configuration -->
+        <div class="control-row pool-row">
+          <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333">
+          <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1">
+          <input type="text" id="pool-password" class="text-input" placeholder="x" value="x">
+          <button id="btn-update-pool-all" class="btn btn-primary">Update All</button>
+        </div>
+
+        <!-- Row 3: Power Target -->
+        <div class="control-row power-row">
+          <div class="power-slider-mini">
+            <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0">
+            <div class="slider-labels-mini">
+              <span>0</span>
+              <span id="slider-value">0.0 kW</span>
+              <span id="slider-max">Max</span>
+            </div>
+          </div>
+          <div class="power-input-mini">
+            <input type="number" id="power-input" class="power-input" placeholder="0.0" min="0" step="0.1">
+            <span class="input-unit">kW</span>
+          </div>
+          <button id="btn-set-power" class="btn btn-primary">Set Power</button>
         </div>
       </div>
     </section>
@@ -356,61 +404,6 @@
           <tbody id="miners-table-body">
           </tbody>
         </table>
-      </div>
-    </section>
-
-    <!-- Historical Graphs Section - Now after miners -->
-    <section class="graphs-section">
-      <div class="section-header">
-        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="20" x2="18" y2="10" />
-            <line x1="12" y1="20" x2="12" y2="4" />
-            <line x1="6" y1="20" x2="6" y2="14" />
-          </svg> Historical Data</h2>
-        <div class="graph-controls">
-          <div class="time-scope-buttons">
-            <button class="scope-btn" data-scope="5m">5M</button>
-            <button class="scope-btn" data-scope="15m">15M</button>
-            <button class="scope-btn" data-scope="1h">1H</button>
-            <button class="scope-btn" data-scope="6h">6H</button>
-            <button class="scope-btn" data-scope="24h">24H</button>
-          </div>
-          <select id="graph-miner-select" class="miner-select">
-            <option value="fleet">Entire Fleet</option>
-          </select>
-        </div>
-      </div>
-      <div class="graphs-grid">
-        <div class="graph-card">
-          <div class="graph-header">
-            <span class="graph-title">Hashrate</span>
-            <span class="graph-value" id="graph-hashrate-current">-- TH/s</span>
-          </div>
-          <div class="graph-container">
-            <canvas id="hashrate-chart"></canvas>
-          </div>
-          <div class="graph-empty-hint hidden" id="hashrate-empty">Collecting data...</div>
-        </div>
-        <div class="graph-card">
-          <div class="graph-header">
-            <span class="graph-title">Power Consumption</span>
-            <span class="graph-value" id="graph-power-current">-- kW</span>
-          </div>
-          <div class="graph-container">
-            <canvas id="power-chart"></canvas>
-          </div>
-          <div class="graph-empty-hint hidden" id="power-empty">Collecting data...</div>
-        </div>
-        <div class="graph-card">
-          <div class="graph-header">
-            <span class="graph-title">Temperature</span>
-            <span class="graph-value" id="graph-temp-current">-- °C</span>
-          </div>
-          <div class="graph-container">
-            <canvas id="temp-chart"></canvas>
-          </div>
-          <div class="graph-empty-hint hidden" id="temp-empty">Collecting data...</div>
-        </div>
       </div>
     </section>
 
@@ -686,13 +679,9 @@
               <span class="chip-health-item warning"><span class="chip-count" id="warning-chip-count">--</span> Warning</span>
               <span class="chip-health-item dead"><span class="chip-count" id="dead-chip-count">--</span> Dead</span>
             </div>
-            <button class="btn btn-small btn-secondary" id="btn-load-chip-hashrate" title="Load per-chip hashrate data (Vnish only)">
-              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              Load Chip Data
-            </button>
+            <span class="chip-loading-indicator" id="chip-loading-indicator" style="display: none;">
+              <span class="spinner-small"></span> Loading chip data...
+            </span>
           </div>
           <div id="modal-boards" class="boards-container">
             <!-- Boards will be populated dynamically -->
@@ -933,6 +922,10 @@
               <span class="system-info-value" id="modal-ip-addr">--</span>
             </div>
             <div class="system-info-item">
+              <span class="system-info-label">Netmask</span>
+              <span class="system-info-value" id="modal-netmask">--</span>
+            </div>
+            <div class="system-info-item">
               <span class="system-info-label">Gateway</span>
               <span class="system-info-value" id="modal-gateway">--</span>
             </div>
@@ -952,17 +945,33 @@
               <span class="system-info-label">Hardware Version</span>
               <span class="system-info-value" id="modal-hwver">--</span>
             </div>
+            <div class="system-info-item">
+              <span class="system-info-label">CGMiner Version</span>
+              <span class="system-info-value" id="modal-cgminer-ver">--</span>
+            </div>
             <div class="system-info-item full-width">
               <span class="system-info-label">Firmware Version</span>
               <span class="system-info-value" id="modal-fwver">--</span>
             </div>
-            <div class="system-info-item">
+            <div class="system-info-item full-width">
               <span class="system-info-label">Kernel Version</span>
               <span class="system-info-value" id="modal-kernel">--</span>
             </div>
             <div class="system-info-item">
               <span class="system-info-label">System Uptime</span>
               <span class="system-info-value" id="modal-sys-uptime">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Current Time</span>
+              <span class="system-info-value" id="modal-curtime">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Load Average</span>
+              <span class="system-info-value" id="modal-loadavg">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Memory Usage</span>
+              <span class="system-info-value" id="modal-memory">--</span>
             </div>
           </div>
         </div>

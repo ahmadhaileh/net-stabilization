@@ -43,8 +43,9 @@ class Settings(BaseSettings):
     
     # Fleet Configuration
     rated_power_kw: Optional[float] = None  # Auto-calculated if not set
-    min_power_threshold_kw: float = 1.0
+    min_power_threshold_kw: float = 0.1  # Lower threshold for activation
     power_ramp_rate_kw_per_sec: float = 50.0
+    idle_all_on_startup: bool = True  # Idle all miners when system starts
     
     @property
     def awesome_miner_base_url(self) -> str:

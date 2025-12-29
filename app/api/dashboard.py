@@ -75,7 +75,7 @@ class ConfigUpdateRequest(BaseModel):
 
 class ManualControlRequest(BaseModel):
     """Request to manually control a miner."""
-    action: str = Field(..., pattern="^(start|stop|restart|enable|disable)$")
+    action: str = Field(..., pattern="^(start|stop|restart|reboot|reset|enable|disable)$")
 
 
 # =========================================================================
@@ -198,7 +198,12 @@ async def control_miner(miner_id: str, request: ManualControlRequest):
     """
     Manually control a specific miner.
     
-    Available actions: start, stop, restart, enable, disable
+    Available actions:
+    - start: Resume mining (wake from sleep)
+    - stop: Pause mining (enter sleep mode)
+    - restart: Soft restart (restart cgminer software)
+    - reboot: Full system reboot (takes ~60-90 seconds)
+    - reset: Factory reset (restore default configuration)
     """
     settings = get_settings()
     
@@ -212,10 +217,14 @@ async def control_miner(miner_id: str, request: ManualControlRequest):
             success, msg = await discovery.set_miner_idle(miner_id)
         elif request.action == "restart":
             success, msg = await discovery.restart_miner(miner_id)
+        elif request.action == "reboot":
+            success, msg = await discovery.reboot_miner(miner_id)
+        elif request.action == "reset":
+            success, msg = await discovery.factory_reset_miner(miner_id)
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Action '{request.action}' not supported in direct mode. Use start/stop/restart."
+                detail=f"Action '{request.action}' not supported in direct mode. Use start/stop/restart/reboot/reset."
             )
     else:
         # AwesomeMiner mode
@@ -248,6 +257,34 @@ async def control_miner(miner_id: str, request: ManualControlRequest):
         "miner_id": miner_id,
         "action": request.action,
         "message": msg if settings.miner_discovery_enabled else None
+    }
+
+
+@router.post(
+    "/miner/{miner_ip}/blink",
+    summary="Toggle miner find mode (LED blinking)"
+)
+async def blink_miner_led(miner_ip: str):
+    """
+    Toggle the miner's find mode (LED blinking) to help locate it physically.
+    
+    This uses the Vnish find_mode.cgi endpoint which toggles the LED.
+    Calling this toggles between on and off states.
+    """
+    settings = get_settings()
+    
+    if not settings.miner_discovery_enabled:
+        return {"success": False, "error": "Find mode only available in direct mode"}
+    
+    discovery = get_discovery_service()
+    success, msg, is_enabled = await discovery.blink_miner(miner_ip)
+    
+    return {
+        "success": success,
+        "miner_ip": miner_ip,
+        "message": msg,
+        "is_enabled": is_enabled,
+        "error": None if success else msg
     }
 
 
@@ -334,6 +371,7 @@ async def health_check():
         return {
             "healthy": online_count > 0 or True,  # Healthy even with no miners (discovery mode)
             "mode": "direct",
+            "network_cidr": settings.miner_network_cidr,
             "services": {
                 "miner_discovery": True,
                 "fleet_manager": True,
@@ -1008,10 +1046,20 @@ async def get_miner_details(miner_ip: str):
                         "gateway": system_data.get("gateway", ""),
                         "dnsservers": system_data.get("dnsservers", ""),
                         "nettype": system_data.get("nettype", ""),
-                        "firmware_version": system_data.get("file_system_version", ""),
+                        "firmware_version": system_data.get("system_filesystem_version", system_data.get("file_system_version", "")),
                         "kernel_version": system_data.get("system_kernel_version", ""),
                         "hardware_version": system_data.get("ant_hwv", ""),
-                        "system_uptime": system_data.get("elapsed", 0)
+                        "system_uptime": system_data.get("elapsed", 0),
+                        # Additional fields from miner
+                        "uptime": system_data.get("uptime", ""),
+                        "curtime": system_data.get("curtime", ""),
+                        "loadaverage": system_data.get("loadaverage", ""),
+                        "mem_total": system_data.get("mem_total", ""),
+                        "mem_free": system_data.get("mem_free", ""),
+                        "mem_used": system_data.get("mem_used", ""),
+                        "bmminer_version": system_data.get("bmminer_version", system_data.get("cgminer_version", "")),
+                        "system_mode": system_data.get("system_mode", ""),
+                        "netdevice": system_data.get("netdevice", ""),
                     }
                 except Exception as e:
                     logger.warning("miner_details_system_parse_error", ip=miner_ip, error=str(e))

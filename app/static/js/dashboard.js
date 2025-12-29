@@ -21,6 +21,7 @@ let state = {
     viewMode: 'grid',
     ratedPower: 0,
     lastScan: null,
+    minerDetailsCache: {}, // Cache detailed miner data for instant modal population
 };
 
 // DOM Elements cache
@@ -109,7 +110,8 @@ async function fetchDiscoveredMiners() {
                 const updated = state.discoveredMiners.find((m) => m.ip === currentModalMiner.ip);
                 if (updated) {
                     currentModalMiner = updated;
-                    updateModalOverview(updated);
+                    // Only update basic live data, preserve detailed data
+                    updateModalOverviewLive(updated);
                     addMinerChartDataPoint(updated);
                 }
             }
@@ -229,9 +231,11 @@ function updateStatusDisplay() {
 }
 
 function updateHealthDisplay(health) {
-    const modeBadge = $('mode-badge');
-    modeBadge.textContent = health.mode === 'direct' ? 'Direct Mode' : 'AwesomeMiner Mode';
-    modeBadge.className = `mode-badge ${health.mode}`;
+    // Update network CIDR display
+    const networkCidrEl = $('network-cidr');
+    if (networkCidrEl && health.network_cidr) {
+        networkCidrEl.textContent = health.network_cidr;
+    }
 }
 
 function updateConnectionStatus(connected) {
@@ -371,8 +375,11 @@ function updateMinersGrid() {
             const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : miner.rated_power_kw.toFixed(2);
             const efficiency = hashrate > 0 && miner.rated_power_kw > 0 ? (hashrate / (miner.rated_power_kw * 1000)).toFixed(2) : '--';
 
-            // Board status - simulate based on mining status
-            const boards = miner.is_mining ? [true, true, true] : miner.is_online ? [true, true, false] : [false, false, false];
+            // Board status - when miner is idle/not mining, we can't know board status
+            // so show all as unknown (null) rather than simulating incorrect data
+            // When mining, boards are working. When offline, boards are down.
+            // When idle (online but not mining), we don't have board data, show as OK (not error)
+            const boards = miner.is_mining ? [true, true, true] : miner.is_online ? [true, true, true] : [false, false, false];
 
             // Get firmware badge
             const firmwareType = miner.firmware_type || 'unknown';
@@ -388,12 +395,29 @@ function updateMinersGrid() {
                     </div>
                     ${firmwareBadgeText ? `<span class="firmware-badge ${firmwareType}">${firmwareBadgeText}</span>` : ''}
                     <div class="miner-actions-mini">
-                        <button class="btn-icon-small" onclick="controlMiner('${miner.id}', 'restart')" title="Restart">
+                        <button class="btn-icon-small" onclick="controlMiner('${miner.id}', 'restart')" title="Soft Restart (CGMiner)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                         </button>
-                        <button class="btn-icon-small danger" onclick="removeMiner('${miner.id}')" title="Remove">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        </button>
+                        <div class="dropdown">
+                            <button class="btn-icon-small dropdown-toggle" onclick="toggleDropdown(this)" title="More Actions">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                            </button>
+                            <div class="dropdown-menu">
+                                <button class="dropdown-item" onclick="controlMiner('${miner.id}', 'reboot')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                                    Full Reboot
+                                </button>
+                                <button class="dropdown-item danger" onclick="confirmReset('${miner.id}')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                                    Factory Reset
+                                </button>
+                                <div class="dropdown-divider"></div>
+                                <button class="dropdown-item danger" onclick="removeMiner('${miner.id}')">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                    Remove Miner
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -475,6 +499,10 @@ function updateMinersGrid() {
                              <span class="btn-text">Resume</span>
                            </button>`
                     }
+                    <button class="btn btn-secondary btn-small" onclick="toggleFindMiner('${miner.ip}')" title="Toggle find mode (LED blink)">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                        <span class="btn-text">Find</span>
+                    </button>
                     <a href="http://${miner.ip}" target="_blank" class="btn btn-secondary btn-small">
                         <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
                         <span class="btn-text">Web UI</span>
@@ -509,7 +537,7 @@ function updateMinersTable() {
             const pool = extractPoolName(miner.pool_url);
 
             return `
-            <tr class="${statusClass}">
+            <tr class="${statusClass} miner-row" data-ip="${miner.ip}">
                 <td>
                     <span class="miner-status-badge ${statusClass}">
                         <span class="status-dot"></span>
@@ -529,13 +557,16 @@ function updateMinersTable() {
                 <td class="pool-cell">${pool}</td>
                 <td>${uptime}</td>
                 <td class="actions-cell">
-                    ${
-                        miner.is_mining
-                            ? `<button class="btn btn-warning btn-xs" onclick="controlMiner('${miner.id}', 'stop')">Idle</button>`
-                            : `<button class="btn btn-success btn-xs" onclick="controlMiner('${miner.id}', 'start')" ${!miner.is_online ? 'disabled' : ''}>Resume</button>`
-                    }
-                    <button class="btn btn-secondary btn-xs" onclick="controlMiner('${miner.id}', 'restart')">Restart</button>
-                    <a href="http://${miner.ip}" target="_blank" class="btn btn-secondary btn-xs">Web</a>
+                    <div class="actions-wrapper">
+                        ${
+                            miner.is_mining
+                                ? `<button class="btn btn-warning btn-xs" onclick="controlMiner('${miner.id}', 'stop')">Idle</button>`
+                                : `<button class="btn btn-success btn-xs" onclick="controlMiner('${miner.id}', 'start')" ${!miner.is_online ? 'disabled' : ''}>Resume</button>`
+                        }
+                        <button class="btn btn-secondary btn-xs" onclick="toggleFindMiner('${miner.ip}')" title="Toggle find mode">Find</button>
+                        <button class="btn btn-secondary btn-xs" onclick="controlMiner('${miner.id}', 'restart')">Restart</button>
+                        <a href="http://${miner.ip}" target="_blank" class="btn btn-secondary btn-xs">Web</a>
+                    </div>
                 </td>
             </tr>
         `;
@@ -784,6 +815,19 @@ async function handleAddMiner() {
 }
 
 async function controlMiner(minerId, action) {
+    // Close any open dropdowns
+    document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
+    
+    // Show immediate feedback for longer operations
+    const longOps = {
+        'reboot': 'Rebooting... (takes ~60-90 seconds)',
+        'reset': 'Factory resetting...'
+    };
+    
+    if (longOps[action]) {
+        showToast(longOps[action], 'info');
+    }
+    
     try {
         const response = await fetch(`${CONFIG.apiBase}/miners/${minerId}/control`, {
             method: 'POST',
@@ -793,14 +837,49 @@ async function controlMiner(minerId, action) {
         const data = await response.json();
 
         if (data.success) {
-            showToast(`${action} command sent`, 'success');
+            showToast(data.message || `${action} command sent`, 'success');
         } else {
             showToast(data.message || `Failed to ${action} miner`, 'error');
         }
 
-        setTimeout(fetchDiscoveredMiners, 1000);
+        // Longer delay for system-level operations
+        const delay = ['reboot', 'reset'].includes(action) ? 5000 : 1000;
+        setTimeout(fetchDiscoveredMiners, delay);
     } catch (error) {
         showToast(`Error: ${action} command failed`, 'error');
+    }
+}
+
+function toggleDropdown(button) {
+    const dropdown = button.closest('.dropdown');
+    const menu = dropdown.querySelector('.dropdown-menu');
+    
+    // Close other open dropdowns
+    document.querySelectorAll('.dropdown-menu.show').forEach(m => {
+        if (m !== menu) m.classList.remove('show');
+    });
+    
+    menu.classList.toggle('show');
+    
+    // Close on outside click
+    const closeHandler = (e) => {
+        if (!dropdown.contains(e.target)) {
+            menu.classList.remove('show');
+            document.removeEventListener('click', closeHandler);
+        }
+    };
+    
+    if (menu.classList.contains('show')) {
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+}
+
+function confirmReset(minerId) {
+    // Close dropdown first
+    document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
+    
+    if (confirm('⚠️ FACTORY RESET\n\nThis will clear ALL pool configurations and reset mining settings to defaults.\n\nNetwork settings will NOT be affected.\n\nAre you sure?')) {
+        controlMiner(minerId, 'reset');
     }
 }
 
@@ -913,6 +992,34 @@ function showToast(message, type = 'info') {
 window.controlMiner = controlMiner;
 window.removeMiner = removeMiner;
 window.openMinerModal = openMinerModal;
+window.blinkMiner = blinkMiner;
+window.toggleFindMiner = toggleFindMiner;
+window.toggleDropdown = toggleDropdown;
+window.confirmReset = confirmReset;
+
+// Toggle miner find mode (LED blinking)
+async function toggleFindMiner(minerIp) {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/miner/${minerIp}/blink`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await response.json();
+        if (data.success) {
+            const stateText = data.is_enabled ? 'ON' : 'OFF';
+            showToast(`Find mode ${stateText}`, data.is_enabled ? 'success' : 'info');
+        } else {
+            showToast(data.error || 'Find mode not supported on this miner', 'warning');
+        }
+    } catch (error) {
+        showToast('Failed to toggle find mode', 'error');
+    }
+}
+
+// Legacy blink function (for backwards compatibility)
+async function blinkMiner(minerIp) {
+    return toggleFindMiner(minerIp);
+}
 
 // =========================================================================
 // Pool Configuration Handlers
@@ -1626,7 +1733,13 @@ const TIME_SCOPES = {
 };
 
 function updateCharts() {
-    const cutoff = Date.now() - (TIME_SCOPES[currentTimeScope] || TIME_SCOPES['5m']);
+    const now = Date.now();
+    const scopeDuration = TIME_SCOPES[currentTimeScope] || TIME_SCOPES['5m'];
+    const cutoff = now - scopeDuration;
+
+    // Calculate time bounds for the selected scope
+    const minTime = new Date(cutoff);
+    const maxTime = new Date(now);
 
     // Get data source based on selected miner
     let dataSource;
@@ -1643,18 +1756,25 @@ function updateCharts() {
     // Update empty hints based on data availability
     updateGraphEmptyHints(filteredHashrate.length, filteredPower.length, filteredTemp.length);
 
+    // Update each chart with data and explicit time bounds
     if (charts.hashrate) {
         charts.hashrate.data.datasets[0].data = filteredHashrate;
+        charts.hashrate.options.scales.x.min = minTime;
+        charts.hashrate.options.scales.x.max = maxTime;
         charts.hashrate.update('none');
     }
 
     if (charts.power) {
         charts.power.data.datasets[0].data = filteredPower;
+        charts.power.options.scales.x.min = minTime;
+        charts.power.options.scales.x.max = maxTime;
         charts.power.update('none');
     }
 
     if (charts.temp) {
         charts.temp.data.datasets[0].data = filteredTemp;
+        charts.temp.options.scales.x.min = minTime;
+        charts.temp.options.scales.x.max = maxTime;
         charts.temp.update('none');
     }
 }
@@ -1831,27 +1951,36 @@ function updateModalChartsWithScope() {
         '6h': 6 * 60 * 60 * 1000,
     };
 
-    const cutoff = Date.now() - (scopeMs[modalTimeScope] || scopeMs['5m']);
+    const now = Date.now();
+    const scopeDuration = scopeMs[modalTimeScope] || scopeMs['5m'];
+    const cutoff = now - scopeDuration;
+
+    // Calculate time bounds for the selected scope
+    const minTime = new Date(cutoff);
+    const maxTime = new Date(now);
 
     // Filter data based on scope
     const filteredHashrate = modalChartData.fullData.hashrate.filter((p) => p.x > cutoff);
     const filteredTemp = modalChartData.fullData.temp.filter((p) => p.x > cutoff);
     const filteredPower = modalChartData.fullData.power.filter((p) => p.x > cutoff);
 
-    // Update charts
+    // Update charts with time-based data
     if (modalCharts.hashrate) {
-        modalCharts.hashrate.data.labels = filteredHashrate.map((p) => new Date(p.x).toLocaleTimeString());
-        modalCharts.hashrate.data.datasets[0].data = filteredHashrate.map((p) => p.y);
+        modalCharts.hashrate.data.datasets[0].data = filteredHashrate.map((p) => ({ x: new Date(p.x), y: p.y }));
+        modalCharts.hashrate.options.scales.x.min = minTime;
+        modalCharts.hashrate.options.scales.x.max = maxTime;
         modalCharts.hashrate.update('none');
     }
     if (modalCharts.temp) {
-        modalCharts.temp.data.labels = filteredTemp.map((p) => new Date(p.x).toLocaleTimeString());
-        modalCharts.temp.data.datasets[0].data = filteredTemp.map((p) => p.y);
+        modalCharts.temp.data.datasets[0].data = filteredTemp.map((p) => ({ x: new Date(p.x), y: p.y }));
+        modalCharts.temp.options.scales.x.min = minTime;
+        modalCharts.temp.options.scales.x.max = maxTime;
         modalCharts.temp.update('none');
     }
     if (modalCharts.power) {
-        modalCharts.power.data.labels = filteredPower.map((p) => new Date(p.x).toLocaleTimeString());
-        modalCharts.power.data.datasets[0].data = filteredPower.map((p) => p.y);
+        modalCharts.power.data.datasets[0].data = filteredPower.map((p) => ({ x: new Date(p.x), y: p.y }));
+        modalCharts.power.options.scales.x.min = minTime;
+        modalCharts.power.options.scales.x.max = maxTime;
         modalCharts.power.update('none');
     }
 }
@@ -1887,16 +2016,46 @@ async function openMinerModal(minerIp) {
     }
 
     currentModalMiner = miner;
-    currentMinerDetails = null;
+    
+    // Check for cached details - use immediately if available
+    const cachedDetails = state.minerDetailsCache[minerIp];
+    currentMinerDetails = cachedDetails || null;
 
-    // Reset chart data including full data
-    modalChartData = {
-        hashrate: [],
-        temp: [],
-        power: [],
-        timestamps: [],
-        fullData: { hashrate: [], temp: [], power: [] },
-    };
+    // Load historical data from the global history storage if available
+    const existingHistory = historyData.miners[minerIp];
+    if (existingHistory) {
+        // Copy existing historical data into modal chart data
+        // Convert Date objects to timestamps for consistent filtering
+        modalChartData = {
+            hashrate: [],
+            temp: [],
+            power: [],
+            timestamps: [],
+            fullData: {
+                hashrate: existingHistory.hashrate.map(p => ({ 
+                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                    y: p.y 
+                })),
+                temp: existingHistory.temp.map(p => ({ 
+                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                    y: p.y 
+                })),
+                power: existingHistory.power.map(p => ({ 
+                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                    y: p.y * 1000 // Convert kW to W for modal display
+                })),
+            },
+        };
+    } else {
+        // Reset chart data if no history exists
+        modalChartData = {
+            hashrate: [],
+            temp: [],
+            power: [],
+            timestamps: [],
+            fullData: { hashrate: [], temp: [], power: [] },
+        };
+    }
 
     // Reset time scope to default
     modalTimeScope = '5m';
@@ -1908,8 +2067,13 @@ async function openMinerModal(minerIp) {
     $('modal-miner-name').textContent = miner.model || 'Miner Details';
     $('modal-miner-ip').textContent = miner.ip;
 
-    // Update tabs with basic data first
-    updateModalOverview(miner);
+    // If we have cached details, use them immediately for full population
+    if (cachedDetails) {
+        updateModalWithDetails(miner, cachedDetails);
+    } else {
+        // Update tabs with basic data first (will show '--' for detailed fields)
+        updateModalOverview(miner);
+    }
     updateModalBoards(miner);
     updateModalPools(miner);
     updateModalConfig(miner);
@@ -1918,15 +2082,21 @@ async function openMinerModal(minerIp) {
     // Show modal
     $('miner-modal').classList.add('active');
 
-    // Fetch detailed data from API in background
+    // Fetch fresh detailed data from API in background to update cache
     try {
         const details = await fetchMinerDetails(miner.ip);
         if (details) {
             currentMinerDetails = details;
+            state.minerDetailsCache[minerIp] = details; // Cache for future use
             updateModalWithDetails(miner, details);
         }
     } catch (e) {
         console.warn('Failed to fetch detailed miner info:', e);
+    }
+
+    // Auto-load chip hashrate data for Vnish firmware
+    if (miner.firmware_type === 'vnish' || !miner.firmware_type) {
+        loadChipHashrateAuto(miner.ip);
     }
 }
 
@@ -2016,6 +2186,38 @@ function closeModal() {
     modalCharts = { hashrate: null, temp: null, power: null };
 }
 
+// Update only live/changing data (called on polling interval)
+function updateModalOverviewLive(miner) {
+    const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
+    const hashrate = parseFloat(miner.hashrate_ghs) || 0;
+    const hashrateDisplay = hashrate >= 1000 ? (hashrate / 1000).toFixed(2) + ' TH/s' : hashrate.toFixed(0) + ' GH/s';
+    const power = miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+    const powerWatts = power * 1000;
+    const efficiency = hashrate > 0 && power > 0 ? ((power * 1000) / (hashrate / 1000)).toFixed(1) : '--';
+
+    // Calculate status class
+    let statusClass = 'status-offline';
+    if (miner.is_mining) statusClass = 'status-mining';
+    else if (miner.is_online) statusClass = 'status-idle';
+
+    // Update only live-changing values
+    const modalStatus = $('modal-status');
+    modalStatus.textContent = statusText;
+    modalStatus.className = 'detail-value';
+    modalStatus.classList.add(statusClass);
+
+    $('modal-hashrate').textContent = hashrateDisplay;
+    $('modal-power').textContent = powerWatts.toFixed(0) + ' W';
+    $('modal-efficiency').textContent = efficiency + ' J/TH';
+    if (miner.temperature_c > 0) $('modal-chip-temp').textContent = miner.temperature_c.toFixed(0) + ' °C';
+    if (miner.fan_speed_pct > 0) $('modal-fan-speed').textContent = miner.fan_speed_pct.toFixed(0) + '%';
+    $('modal-uptime').textContent = formatUptime(miner.uptime_seconds);
+
+    // Update control buttons state
+    updateModalControlButtons(miner);
+}
+
+// Update all overview fields (called on modal open)
 function updateModalOverview(miner) {
     const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
     const hashrate = parseFloat(miner.hashrate_ghs) || 0;
@@ -2276,20 +2478,20 @@ async function loadChipHashrate() {
         return;
     }
 
-    const btn = $('btn-load-chip-hashrate');
-    const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-small"></span> Loading...';
-    btn.disabled = true;
+    await loadChipHashrateAuto(currentModalMiner.ip);
+}
+
+// Auto-load chip hashrate without button click
+async function loadChipHashrateAuto(minerIp) {
+    const indicator = $('chip-loading-indicator');
+    if (indicator) indicator.style.display = 'inline-flex';
 
     try {
-        const response = await fetch(`/dashboard/api/miner/${currentModalMiner.ip}/chip-hashrate`);
+        const response = await fetch(`/dashboard/api/miner/${minerIp}/chip-hashrate`);
         const data = await response.json();
 
         if (!data.success) {
-            showToast(data.error || 'Failed to load chip data', 'error');
-            if (!data.firmware_support) {
-                showToast('Chip hashrate requires Vnish firmware', 'warning');
-            }
+            console.warn(data.error || 'Failed to load chip data');
             return;
         }
 
@@ -2300,14 +2502,10 @@ async function loadChipHashrate() {
 
         // Update board cards with chip hashrate visualization
         updateBoardsWithChipHashrate(data.boards);
-
-        showToast(`Loaded chip data: ${data.total_chips} chips, ${data.health_percent}% healthy`, 'success');
     } catch (error) {
-        console.error('Failed to load chip hashrate:', error);
-        showToast('Failed to load chip hashrate data', 'error');
+        console.warn('Failed to load chip hashrate:', error);
     } finally {
-        btn.innerHTML = originalText;
-        btn.disabled = false;
+        if (indicator) indicator.style.display = 'none';
     }
 }
 
@@ -2821,10 +3019,23 @@ function updateModalSystemInfo(system) {
     $('modal-hwver').textContent = system.hardware_version || '--';
     $('modal-fwver').textContent = system.firmware_version || '--';
     $('modal-kernel').textContent = system.kernel_version || '--';
-
-    if (system.system_uptime) {
-        $('modal-sys-uptime').textContent = formatUptime(system.system_uptime);
+    
+    // Additional system info
+    if (system.uptime) $('modal-sys-uptime').textContent = system.uptime;
+    else if (system.system_uptime) $('modal-sys-uptime').textContent = formatUptime(system.system_uptime);
+    
+    if (system.curtime) $('modal-curtime').textContent = system.curtime;
+    if (system.loadaverage) $('modal-loadavg').textContent = system.loadaverage;
+    if (system.bmminer_version) $('modal-cgminer-ver').textContent = system.bmminer_version;
+    
+    // Memory info
+    if (system.mem_total && system.mem_free) {
+        const memUsedMB = ((parseInt(system.mem_total) - parseInt(system.mem_free)) / 1024).toFixed(1);
+        const memTotalMB = (parseInt(system.mem_total) / 1024).toFixed(1);
+        $('modal-memory').textContent = `${memUsedMB} / ${memTotalMB} MB`;
     }
+    
+    if (system.netmask) $('modal-netmask').textContent = system.netmask;
 }
 
 // Apply configuration to miner
@@ -2938,10 +3149,35 @@ function initMinerCharts(miner) {
         animation: { duration: 0 },
         plugins: {
             legend: { display: false },
-            tooltip: { enabled: true },
+            tooltip: {
+                backgroundColor: 'rgba(15, 20, 25, 0.95)',
+                titleColor: '#e6edf3',
+                bodyColor: '#8b949e',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                borderWidth: 1,
+                padding: 12,
+                displayColors: false,
+            },
         },
         scales: {
-            x: { display: false },
+            x: {
+                type: 'time',
+                time: {
+                    displayFormats: {
+                        minute: 'HH:mm',
+                        hour: 'HH:mm',
+                    },
+                    tooltipFormat: 'HH:mm:ss',
+                },
+                grid: { color: 'rgba(255,255,255,0.05)' },
+                ticks: {
+                    color: 'rgba(255,255,255,0.5)',
+                    font: { size: 10 },
+                    maxRotation: 0,
+                    autoSkip: true,
+                    maxTicksLimit: 6,
+                },
+            },
             y: {
                 display: true,
                 grid: { color: 'rgba(255,255,255,0.05)' },
@@ -2949,6 +3185,7 @@ function initMinerCharts(miner) {
                     color: 'rgba(255,255,255,0.5)',
                     font: { size: 10 },
                 },
+                beginAtZero: true,
             },
         },
         elements: {
@@ -3020,8 +3257,13 @@ function initMinerCharts(miner) {
         });
     }
 
-    // Add initial data point
-    addMinerChartDataPoint(miner);
+    // Add initial data point (only if no historical data was loaded)
+    if (modalChartData.fullData.hashrate.length === 0) {
+        addMinerChartDataPoint(miner);
+    }
+    
+    // Render the charts with existing historical data
+    updateModalChartsWithScope();
 }
 
 // Add data point to miner charts
@@ -3226,6 +3468,15 @@ function setupNewEventListeners() {
         const card = e.target.closest('.miner-card:not(.placeholder)');
         if (card && !e.target.closest('button') && !e.target.closest('a')) {
             const ip = card.querySelector('.miner-ip')?.textContent;
+            if (ip) openMinerModal(ip);
+        }
+    });
+
+    // Make miner table rows clickable to open modal
+    document.addEventListener('click', (e) => {
+        const row = e.target.closest('.miner-row');
+        if (row && !e.target.closest('button') && !e.target.closest('a')) {
+            const ip = row.dataset.ip;
             if (ip) openMinerModal(ip);
         }
     });
