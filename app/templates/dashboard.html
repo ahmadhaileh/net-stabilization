@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Net Stabilization - Mining Fleet Control</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <!-- Chart.js Date Adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+</head>
+
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+        Net Stabilization
+      </h1>
+      <span class="mode-badge" id="mode-badge">Direct Mode</span>
+    </div>
+    <div class="header-right">
+      <div class="header-stat">
+        <span class="stat-label">Total Hashrate</span>
+        <span class="stat-value" id="total-hashrate">0 GH/s</span>
+      </div>
+      <div class="header-stat">
+        <span class="stat-label">Est. Power</span>
+        <span class="stat-value" id="total-power">0.0 kW</span>
+      </div>
+      <div class="connection-status">
+        <span id="status-dot" class="status-dot"></span>
+        <span id="connection-status">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Top Row: Fleet Status + EMS Status -->
+    <div class="top-row">
+      <!-- Fleet Status Card -->
+      <section class="fleet-status-card">
+        <div class="fleet-state-section">
+          <div class="state-display">
+            <div id="fleet-state" class="state-indicator unknown">
+              <span class="state-icon">●</span>
+              <span class="state-text">LOADING</span>
+            </div>
+            <div class="state-subtitle" id="state-subtitle">Initializing system...</div>
+          </div>
+          <div class="fleet-counts">
+            <div class="count-item">
+              <span class="count-value" id="miners-online">0</span>
+              <span class="count-label">Online</span>
+            </div>
+            <div class="count-divider">/</div>
+            <div class="count-item">
+              <span class="count-value" id="miners-total">0</span>
+              <span class="count-label">Total</span>
+            </div>
+            <div class="count-item mining">
+              <span class="count-value" id="miners-mining">0</span>
+              <span class="count-label">Mining</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="fleet-metrics-row">
+          <div class="fleet-metric">
+            <div class="fleet-metric-header">
+              <svg class="fleet-metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              <span class="fleet-metric-label">Total Hashrate</span>
+            </div>
+            <div class="fleet-metric-value" id="fleet-hashrate">0.00 TH/s</div>
+            <div class="fleet-metric-bar">
+              <div id="hashrate-bar-fill" class="fleet-metric-bar-fill hashrate" style="width: 0%"></div>
+            </div>
+          </div>
+          <div class="fleet-metric">
+            <div class="fleet-metric-header">
+              <svg class="fleet-metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+              </svg>
+              <span class="fleet-metric-label">Avg Temperature</span>
+            </div>
+            <div class="fleet-metric-value" id="fleet-temp">-- °C</div>
+            <div class="fleet-metric-bar">
+              <div id="temp-bar-fill" class="fleet-metric-bar-fill temp" style="width: 0%"></div>
+            </div>
+          </div>
+          <div class="fleet-metric">
+            <div class="fleet-metric-header">
+              <svg class="fleet-metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span class="fleet-metric-label">Efficiency</span>
+            </div>
+            <div class="fleet-metric-value" id="fleet-efficiency">-- GH/W</div>
+            <div class="fleet-metric-bar">
+              <div id="efficiency-bar-fill" class="fleet-metric-bar-fill efficiency" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="power-section">
+          <div class="power-header">
+            <span>Fleet Power</span>
+            <span class="power-values">
+              <span id="active-power">0.0</span> / <span id="rated-power">0.0</span> kW
+            </span>
+          </div>
+          <div class="power-bar">
+            <div id="power-bar-fill" class="power-bar-fill" style="width: 0%"></div>
+            <div id="target-marker" class="target-marker" style="left: 0%; display: none;"></div>
+          </div>
+          <div class="power-labels">
+            <span>0%</span>
+            <span id="power-percent">0%</span>
+            <span>100%</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- EMS Status Card -->
+      <section class="ems-status-card">
+        <h3><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg> EMS Protocol Status</h3>
+        <div class="ems-grid">
+          <div class="ems-item">
+            <span class="ems-label">Available for Dispatch</span>
+            <span id="ems-available" class="ems-value status-no">NO</span>
+          </div>
+          <div class="ems-item">
+            <span class="ems-label">Running Status</span>
+            <span id="ems-running" class="ems-value">STANDBY</span>
+          </div>
+          <div class="ems-item">
+            <span class="ems-label">Target Power</span>
+            <span id="ems-target" class="ems-value">-- kW</span>
+          </div>
+          <div class="ems-item">
+            <span class="ems-label">Last EMS Command</span>
+            <span id="ems-last-cmd" class="ems-value">--</span>
+          </div>
+        </div>
+        <div class="ems-endpoint">
+          <code>GET /api/status</code>
+          <code>POST /api/activate</code>
+          <code>POST /api/deactivate</code>
+        </div>
+      </section>
+    </div>
+
+    <!-- Control Panel -->
+    <section class="control-panel compact">
+      <div class="control-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+            <line x1="8" y1="21" x2="16" y2="21" />
+            <line x1="12" y1="17" x2="12" y2="21" />
+          </svg> Fleet Control</h2>
+        <div id="override-badge" class="override-badge hidden">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>Manual Override Active</span>
+        </div>
+      </div>
+
+      <div class="control-sections compact-grid">
+        <!-- Quick Actions - Compact -->
+        <div class="control-group compact-actions">
+          <div class="compact-row">
+            <button id="btn-idle-all" class="btn btn-warning">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+              Idle All
+            </button>
+            <button id="btn-resume-all" class="btn btn-success">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              Resume All
+            </button>
+            <button id="btn-emergency" class="btn btn-danger">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              </svg>
+              Emergency Stop
+            </button>
+            <div class="override-toggle-inline">
+              <label class="toggle-switch small">
+                <input type="checkbox" id="override-toggle">
+                <span class="toggle-slider"></span>
+              </label>
+              <span class="override-label">Manual Override</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Power Target - Compact -->
+        <div class="control-group compact-power">
+          <div class="compact-power-row">
+            <div class="power-slider-mini">
+              <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0">
+              <div class="slider-labels-mini">
+                <span>0</span>
+                <span id="slider-value">0.0 kW</span>
+                <span id="slider-max">Max</span>
+              </div>
+            </div>
+            <div class="power-input-mini">
+              <input type="number" id="power-input" class="power-input" placeholder="0.0" min="0" step="0.1">
+              <span class="input-unit">kW</span>
+            </div>
+            <button id="btn-set-power" class="btn btn-primary">Set</button>
+          </div>
+        </div>
+
+        <!-- Pool Configuration - Compact -->
+        <div class="control-group compact-pool">
+          <div class="pool-config-compact">
+            <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333">
+            <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1">
+            <input type="text" id="pool-password" class="text-input" placeholder="x" value="x">
+            <button id="btn-update-pool-all" class="btn btn-primary">Update All</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Discovery Section -->
+    <section class="discovery-section">
+      <div class="section-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg> Network Discovery</h2>
+        <div class="discovery-info">
+          <span class="info-item">
+            <span class="info-label">Network:</span>
+            <span id="network-cidr" class="info-value">192.168.1.0/24</span>
+          </span>
+          <span class="info-item">
+            <span class="info-label">Last Scan:</span>
+            <span id="last-scan" class="info-value">--</span>
+          </span>
+        </div>
+      </div>
+      <div class="discovery-controls">
+        <button id="btn-scan" class="btn btn-primary">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg>
+          Scan Network
+        </button>
+        <div class="add-miner-form">
+          <input type="text" id="add-miner-ip" placeholder="192.168.1.167">
+          <input type="number" id="add-miner-power" placeholder="1400" value="1400">
+          <button id="btn-add-miner" class="btn btn-secondary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            Add Miner
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Miners Grid -->
+    <section class="miners-section">
+      <div class="section-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+            <rect x="9" y="9" width="6" height="6" />
+            <line x1="9" y1="1" x2="9" y2="4" />
+            <line x1="15" y1="1" x2="15" y2="4" />
+            <line x1="9" y1="20" x2="9" y2="23" />
+            <line x1="15" y1="20" x2="15" y2="23" />
+            <line x1="20" y1="9" x2="23" y2="9" />
+            <line x1="20" y1="14" x2="23" y2="14" />
+            <line x1="1" y1="9" x2="4" y2="9" />
+            <line x1="1" y1="14" x2="4" y2="14" />
+          </svg> Mining Fleet</h2>
+        <div class="view-toggle">
+          <button id="view-grid" class="view-btn active" title="Grid View">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+            </svg>
+          </button>
+          <button id="view-table" class="view-btn" title="Table View">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="8" y1="6" x2="21" y2="6" />
+              <line x1="8" y1="12" x2="21" y2="12" />
+              <line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" />
+              <line x1="3" y1="12" x2="3.01" y2="12" />
+              <line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Grid View -->
+      <div id="miners-grid" class="miners-grid">
+        <div class="miner-card placeholder">
+          <div class="placeholder-content">
+            <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span class="placeholder-text">No miners found. Click "Scan Network" to discover miners.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table View (hidden by default) -->
+      <div id="miners-table-container" class="miners-table-container hidden">
+        <table class="miners-table">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Name / IP</th>
+              <th>Hashrate</th>
+              <th>Temp</th>
+              <th>Fan</th>
+              <th>Power</th>
+              <th>Pool</th>
+              <th>Uptime</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="miners-table-body">
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Historical Graphs Section - Now after miners -->
+    <section class="graphs-section">
+      <div class="section-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10" />
+            <line x1="12" y1="20" x2="12" y2="4" />
+            <line x1="6" y1="20" x2="6" y2="14" />
+          </svg> Historical Data</h2>
+        <div class="graph-controls">
+          <div class="time-scope-buttons">
+            <button class="scope-btn" data-scope="5m">5M</button>
+            <button class="scope-btn" data-scope="15m">15M</button>
+            <button class="scope-btn" data-scope="1h">1H</button>
+            <button class="scope-btn" data-scope="6h">6H</button>
+            <button class="scope-btn" data-scope="24h">24H</button>
+          </div>
+          <select id="graph-miner-select" class="miner-select">
+            <option value="fleet">Entire Fleet</option>
+          </select>
+        </div>
+      </div>
+      <div class="graphs-grid">
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Hashrate</span>
+            <span class="graph-value" id="graph-hashrate-current">-- TH/s</span>
+          </div>
+          <div class="graph-container">
+            <canvas id="hashrate-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="hashrate-empty">Collecting data...</div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Power Consumption</span>
+            <span class="graph-value" id="graph-power-current">-- kW</span>
+          </div>
+          <div class="graph-container">
+            <canvas id="power-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="power-empty">Collecting data...</div>
+        </div>
+        <div class="graph-card">
+          <div class="graph-header">
+            <span class="graph-title">Temperature</span>
+            <span class="graph-value" id="graph-temp-current">-- °C</span>
+          </div>
+          <div class="graph-container">
+            <canvas id="temp-chart"></canvas>
+          </div>
+          <div class="graph-empty-hint hidden" id="temp-empty">Collecting data...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Fleet Anomaly Detection - Now at bottom with more sophisticated detection -->
+    <section class="anomaly-section">
+      <div class="section-header">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg> Fleet Health &amp; Anomaly Detection</h2>
+        <div class="anomaly-summary">
+          <span class="anomaly-count critical" id="anomaly-critical">0 Critical</span>
+          <span class="anomaly-count warning" id="anomaly-warning">0 Warnings</span>
+          <span class="anomaly-count info" id="anomaly-info">0 Info</span>
+        </div>
+      </div>
+      <div class="anomaly-content">
+        <div class="fleet-health-grid">
+          <div class="health-card">
+            <div class="health-icon online">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="fleet-availability">100%</span>
+              <span class="health-label">Fleet Availability</span>
+            </div>
+          </div>
+          <div class="health-card">
+            <div class="health-icon power">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="max-sustained-power">0.0 kW</span>
+              <span class="health-label">Max Sustained Power</span>
+            </div>
+          </div>
+          <div class="health-card">
+            <div class="health-icon hashrate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="hashrate-variance">±0%</span>
+              <span class="health-label">Hashrate Variance</span>
+            </div>
+          </div>
+          <div class="health-card">
+            <div class="health-icon temp">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="temp-spread">0°C</span>
+              <span class="health-label">Temp Spread</span>
+            </div>
+          </div>
+          <div class="health-card">
+            <div class="health-icon efficiency">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="efficiency-score">--</span>
+              <span class="health-label">Efficiency Score</span>
+            </div>
+          </div>
+          <div class="health-card">
+            <div class="health-icon errors">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <div class="health-info">
+              <span class="health-value" id="error-rate">0/hr</span>
+              <span class="health-label">Anomaly Rate</span>
+            </div>
+          </div>
+        </div>
+        <div class="anomaly-list-container">
+          <div class="anomaly-list-header">
+            <span>Fleet Anomalies</span>
+            <button id="btn-clear-anomalies" class="btn btn-small btn-secondary">Clear All</button>
+          </div>
+          <div id="anomaly-list" class="anomaly-list">
+            <div class="anomaly-empty">No anomalies detected - Fleet operating normally</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Command History -->
+    <section class="history-section collapsed" id="history-section">
+      <div class="section-header clickable" id="history-toggle">
+        <h2><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg> Command History</h2>
+        <span class="collapse-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </span>
+      </div>
+      <div class="history-content">
+        <div id="history-list" class="history-list">
+          <div class="history-empty">No commands yet</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scan Modal -->
+  <div id="scan-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg> Network Scan</h3>
+      </div>
+      <div class="modal-body">
+        <div class="scan-progress">
+          <div class="spinner"></div>
+          <span>Scanning network for miners...</span>
+        </div>
+        <div id="scan-results" class="scan-results hidden">
+          <div class="scan-summary">
+            Found <span id="scan-count">0</span> miners
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-scan-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Miner Detail Modal -->
+  <div id="miner-modal" class="modal-overlay">
+    <div class="miner-modal">
+      <div class="modal-header">
+        <div>
+          <h2>
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
+              <rect x="9" y="9" width="6" height="6" />
+              <line x1="9" y1="1" x2="9" y2="4" />
+              <line x1="15" y1="1" x2="15" y2="4" />
+              <line x1="9" y1="20" x2="9" y2="23" />
+              <line x1="15" y1="20" x2="15" y2="23" />
+              <line x1="20" y1="9" x2="23" y2="9" />
+              <line x1="20" y1="14" x2="23" y2="14" />
+              <line x1="1" y1="9" x2="4" y2="9" />
+              <line x1="1" y1="14" x2="4" y2="14" />
+            </svg>
+            <span id="modal-miner-name">Miner Details</span>
+            <span id="modal-firmware-badge" class="firmware-badge unknown" title="Firmware Type">--</span>
+          </h2>
+          <span class="miner-ip" id="modal-miner-ip">192.168.1.xxx</span>
+        </div>
+        <button class="modal-close" id="btn-close-modal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-tabs">
+          <button class="modal-tab active" data-tab="overview">Overview</button>
+          <button class="modal-tab" data-tab="boards">Hash Boards</button>
+          <button class="modal-tab" data-tab="pools">Pools</button>
+          <button class="modal-tab" data-tab="charts">Charts</button>
+          <button class="modal-tab" data-tab="config">Config</button>
+          <button class="modal-tab" data-tab="system">System</button>
+        </div>
+
+        <!-- Overview Tab -->
+        <div class="modal-content active" id="tab-overview">
+          <div class="detail-grid">
+            <div class="detail-item">
+              <div class="detail-label">Status</div>
+              <div class="detail-value" id="modal-status">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Hashrate (5m)</div>
+              <div class="detail-value" id="modal-hashrate">-- TH/s</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Power</div>
+              <div class="detail-value" id="modal-power">-- W</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Efficiency</div>
+              <div class="detail-value" id="modal-efficiency">-- J/TH</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Chip Temp</div>
+              <div class="detail-value" id="modal-chip-temp">-- °C</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">PCB Temp</div>
+              <div class="detail-value" id="modal-pcb-temp">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Fan Speed</div>
+              <div class="detail-value" id="modal-fan-speed">--%</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Uptime</div>
+              <div class="detail-value" id="modal-uptime">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Accepted</div>
+              <div class="detail-value" id="modal-accepted">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Rejected</div>
+              <div class="detail-value" id="modal-rejected">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">HW Errors</div>
+              <div class="detail-value" id="modal-hw-errors">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Firmware</div>
+              <div class="detail-value" id="modal-firmware">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Frequency</div>
+              <div class="detail-value" id="modal-freq">-- MHz</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Voltage</div>
+              <div class="detail-value" id="modal-voltage-val">-- mV</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Pool</div>
+              <div class="detail-value" id="modal-pool">--</div>
+            </div>
+            <div class="detail-item">
+              <div class="detail-label">Worker</div>
+              <div class="detail-value" id="modal-worker">--</div>
+            </div>
+          </div>
+          <div class="modal-controls">
+            <button class="btn btn-success" id="modal-btn-start">Start Mining</button>
+            <button class="btn btn-danger" id="modal-btn-stop">Stop Mining</button>
+            <button class="btn btn-warning" id="modal-btn-reboot">Reboot</button>
+          </div>
+        </div>
+
+        <!-- Hash Boards Tab -->
+        <div class="modal-content" id="tab-boards">
+          <div class="boards-header">
+            <div class="chip-health-summary" id="chip-health-summary">
+              <span class="chip-health-item healthy"><span class="chip-count" id="healthy-chip-count">--</span> Healthy</span>
+              <span class="chip-health-item warning"><span class="chip-count" id="warning-chip-count">--</span> Warning</span>
+              <span class="chip-health-item dead"><span class="chip-count" id="dead-chip-count">--</span> Dead</span>
+            </div>
+            <button class="btn btn-small btn-secondary" id="btn-load-chip-hashrate" title="Load per-chip hashrate data (Vnish only)">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              Load Chip Data
+            </button>
+          </div>
+          <div id="modal-boards" class="boards-container">
+            <!-- Boards will be populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Pools Tab -->
+        <div class="modal-content" id="tab-pools">
+          <div id="modal-pools">
+            <!-- Pools will be populated dynamically -->
+          </div>
+        </div>
+
+        <!-- Charts Tab -->
+        <div class="modal-content" id="tab-charts">
+          <div class="modal-chart-controls">
+            <div class="modal-time-scope-buttons">
+              <button class="modal-scope-btn active" data-scope="5m">5M</button>
+              <button class="modal-scope-btn" data-scope="15m">15M</button>
+              <button class="modal-scope-btn" data-scope="1h">1H</button>
+              <button class="modal-scope-btn" data-scope="6h">6H</button>
+            </div>
+          </div>
+          <div class="miner-charts-container">
+            <div class="miner-chart-wrapper">
+              <div class="miner-chart-header">
+                <span class="miner-chart-title">Hashrate</span>
+                <span class="miner-chart-value" id="modal-chart-hashrate-val">-- TH/s</span>
+              </div>
+              <canvas id="modal-chart-hashrate" class="miner-chart-canvas"></canvas>
+            </div>
+            <div class="miner-chart-wrapper">
+              <div class="miner-chart-header">
+                <span class="miner-chart-title">Temperature</span>
+                <span class="miner-chart-value" id="modal-chart-temp-val">-- °C</span>
+              </div>
+              <canvas id="modal-chart-temp" class="miner-chart-canvas"></canvas>
+            </div>
+            <div class="miner-chart-wrapper">
+              <div class="miner-chart-header">
+                <span class="miner-chart-title">Power</span>
+                <span class="miner-chart-value" id="modal-chart-power-val">-- W</span>
+              </div>
+              <canvas id="modal-chart-power" class="miner-chart-canvas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Config Tab -->
+        <div class="modal-content" id="tab-config">
+          <div class="modal-config-comprehensive">
+            <!-- Performance Settings -->
+            <div class="config-section">
+              <h4 class="config-section-title">Performance Settings</h4>
+              <div class="config-grid">
+                <div class="config-input-group">
+                  <label>Global Frequency (MHz)</label>
+                  <input type="number" id="modal-frequency" placeholder="550" min="400" max="700">
+                </div>
+                <div class="config-input-group">
+                  <label>Global Voltage (mV)</label>
+                  <input type="number" id="modal-voltage" placeholder="880" min="800" max="950">
+                </div>
+                <div class="config-input-group">
+                  <label>ASICBoost</label>
+                  <select id="modal-asicboost">
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Per-Board Tuning (Advanced) -->
+            <details class="config-section advanced">
+              <summary class="config-section-title">Per-Board Tuning (Advanced)</summary>
+              <div class="config-grid per-board">
+                <div class="config-input-group">
+                  <label>Board 1 Freq (MHz)</label>
+                  <input type="number" id="modal-freq1" placeholder="(global)" min="400" max="700">
+                </div>
+                <div class="config-input-group">
+                  <label>Board 1 Volt (mV)</label>
+                  <input type="number" id="modal-volt1" placeholder="(global)" min="800" max="950">
+                </div>
+                <div class="config-input-group">
+                  <label>Board 2 Freq (MHz)</label>
+                  <input type="number" id="modal-freq2" placeholder="(global)" min="400" max="700">
+                </div>
+                <div class="config-input-group">
+                  <label>Board 2 Volt (mV)</label>
+                  <input type="number" id="modal-volt2" placeholder="(global)" min="800" max="950">
+                </div>
+                <div class="config-input-group">
+                  <label>Board 3 Freq (MHz)</label>
+                  <input type="number" id="modal-freq3" placeholder="(global)" min="400" max="700">
+                </div>
+                <div class="config-input-group">
+                  <label>Board 3 Volt (mV)</label>
+                  <input type="number" id="modal-volt3" placeholder="(global)" min="800" max="950">
+                </div>
+              </div>
+            </details>
+
+            <!-- Thermal Settings -->
+            <div class="config-section">
+              <h4 class="config-section-title">Thermal Settings</h4>
+              <div class="config-grid">
+                <div class="config-input-group">
+                  <label>Target Temperature (°C)</label>
+                  <input type="number" id="modal-target-temp" placeholder="75" min="60" max="90">
+                </div>
+                <div class="config-input-group">
+                  <label>Shutdown Temperature (°C)</label>
+                  <input type="number" id="modal-shutdown-temp" placeholder="105" min="95" max="125">
+                </div>
+                <div class="config-input-group">
+                  <label>Fan Mode</label>
+                  <select id="modal-fan-mode">
+                    <option value="auto">Auto</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </div>
+                <div class="config-input-group" id="fan-pwm-group">
+                  <label>Fan PWM (%)</label>
+                  <input type="number" id="modal-fan-pwm" placeholder="100" min="0" max="100">
+                </div>
+              </div>
+            </div>
+
+            <!-- Auto-Downscale Settings (Vnish Auto-Scaling) -->
+            <details class="config-section vnish-feature" id="vnish-autoscale-section">
+              <summary class="config-section-title">
+                <span>Auto-Downscale (Thermal Throttle)</span>
+                <span class="vnish-badge">Vnish</span>
+              </summary>
+              <div class="config-grid">
+                <div class="config-input-group">
+                  <label>Enable Auto-Downscale</label>
+                  <select id="modal-autodownscale">
+                    <option value="false">Disabled</option>
+                    <option value="true">Enabled</option>
+                  </select>
+                </div>
+                <div class="config-input-group">
+                  <label>Step Down (MHz)</label>
+                  <input type="number" id="modal-downscale-step" placeholder="25" min="10" max="100">
+                </div>
+                <div class="config-input-group">
+                  <label>Minimum Freq (MHz)</label>
+                  <input type="number" id="modal-downscale-min" placeholder="400" min="300" max="600">
+                </div>
+                <div class="config-input-group">
+                  <label>Timer (minutes)</label>
+                  <input type="number" id="modal-downscale-timer" placeholder="2" min="1" max="10" title="Time before stepping down">
+                </div>
+                <div class="config-input-group">
+                  <label>Wait After (minutes)</label>
+                  <input type="number" id="modal-downscale-after" placeholder="10" min="1" max="30" title="Wait before stepping back up">
+                </div>
+                <div class="config-input-group">
+                  <label>Precision (%)</label>
+                  <input type="number" id="modal-downscale-prec" placeholder="75" min="50" max="100" title="Hashrate precision threshold">
+                </div>
+              </div>
+              <div class="config-help-text">
+                Auto-downscale reduces frequency when temperature exceeds target, then gradually increases when conditions improve.
+              </div>
+            </details>
+
+            <!-- Vnish Profile Presets -->
+            <details class="config-section vnish-feature" id="vnish-profile-section">
+              <summary class="config-section-title">
+                <span>Quick Presets</span>
+                <span class="vnish-badge">Vnish</span>
+              </summary>
+              <div class="preset-buttons">
+                <button class="btn btn-preset" data-preset="low" title="Low Power: ~400 MHz, ~8.4V">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  <span>Low Power</span>
+                  <small>~10.5 TH/s</small>
+                </button>
+                <button class="btn btn-preset" data-preset="balanced" title="Balanced: ~550 MHz, ~8.8V">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5" />
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+                  </svg>
+                  <span>Balanced</span>
+                  <small>~13.5 TH/s</small>
+                </button>
+                <button class="btn btn-preset" data-preset="high" title="High Performance: ~625 MHz, ~9.0V">
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                  </svg>
+                  <span>Performance</span>
+                  <small>~15 TH/s</small>
+                </button>
+              </div>
+            </details>
+
+            <!-- Alert Settings -->
+            <div class="config-section">
+              <h4 class="config-section-title">Alerts &amp; Safety</h4>
+              <div class="config-grid">
+                <div class="config-input-group">
+                  <label>Beeper</label>
+                  <select id="modal-beeper">
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Apply Button -->
+            <div class="modal-config-actions">
+              <button class="btn btn-secondary" id="modal-btn-reset-config">Reset to Defaults</button>
+              <button class="btn btn-primary" id="modal-btn-apply-config">Apply Configuration</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Tab (New) -->
+        <div class="modal-content" id="tab-system">
+          <div class="system-info-grid">
+            <div class="system-info-item">
+              <span class="system-info-label">Hostname</span>
+              <span class="system-info-value" id="modal-hostname">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">MAC Address</span>
+              <span class="system-info-value" id="modal-mac">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">IP Address</span>
+              <span class="system-info-value" id="modal-ip-addr">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Gateway</span>
+              <span class="system-info-value" id="modal-gateway">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">DNS Server</span>
+              <span class="system-info-value" id="modal-dns">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Network Type</span>
+              <span class="system-info-value" id="modal-nettype">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Miner Type</span>
+              <span class="system-info-value" id="modal-minertype">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Hardware Version</span>
+              <span class="system-info-value" id="modal-hwver">--</span>
+            </div>
+            <div class="system-info-item full-width">
+              <span class="system-info-label">Firmware Version</span>
+              <span class="system-info-value" id="modal-fwver">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">Kernel Version</span>
+              <span class="system-info-value" id="modal-kernel">--</span>
+            </div>
+            <div class="system-info-item">
+              <span class="system-info-label">System Uptime</span>
+              <span class="system-info-value" id="modal-sys-uptime">--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+
+</html>
