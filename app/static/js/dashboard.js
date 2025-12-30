@@ -55,6 +55,7 @@ function setupEventListeners() {
     // View toggle
     $('view-grid')?.addEventListener('click', () => setViewMode('grid'));
     $('view-table')?.addEventListener('click', () => setViewMode('table'));
+    $('view-rack')?.addEventListener('click', () => setViewMode('rack'));
 
     // History toggle
     $('history-toggle')?.addEventListener('click', toggleHistory);
@@ -330,8 +331,10 @@ function updateTotalHashrate() {
 function updateMinersDisplay() {
     if (state.viewMode === 'grid') {
         updateMinersGrid();
-    } else {
+    } else if (state.viewMode === 'table') {
         updateMinersTable();
+    } else if (state.viewMode === 'rack') {
+        updateMinersRack();
     }
     updateFleetMetrics();
     updateMinerDropdowns();
@@ -574,6 +577,113 @@ function updateMinersTable() {
         .join('');
 }
 
+function updateMinersRack() {
+    const rackUnits = $('rack-units');
+    const rackTotalMiners = $('rack-total-miners');
+    const rackTotalHashrate = $('rack-total-hashrate');
+    const rackTotalPower = $('rack-total-power');
+
+    if (state.discoveredMiners.length === 0) {
+        rackUnits.innerHTML = `
+            <div class="rack-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="2" width="16" height="6" rx="1" />
+                    <rect x="4" y="9" width="16" height="6" rx="1" />
+                    <rect x="4" y="16" width="16" height="6" rx="1" />
+                </svg>
+                <span class="rack-empty-text">No miners found. Click "Scan Network" to discover miners.</span>
+            </div>
+        `;
+        rackTotalMiners.textContent = '0';
+        rackTotalHashrate.textContent = '0 TH/s';
+        rackTotalPower.textContent = '0 kW';
+        return;
+    }
+
+    // Calculate totals
+    let totalHashrate = 0;
+    let totalPower = 0;
+    
+    state.discoveredMiners.forEach(miner => {
+        totalHashrate += parseFloat(miner.hashrate_ghs) || 0;
+        totalPower += miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+    });
+
+    // Update stats (separate value from label now)
+    rackTotalMiners.textContent = state.discoveredMiners.length;
+    rackTotalHashrate.textContent = totalHashrate >= 1000 
+        ? (totalHashrate / 1000).toFixed(1) + ' TH/s' 
+        : totalHashrate.toFixed(0) + ' GH/s';
+    rackTotalPower.textContent = totalPower.toFixed(1) + ' kW';
+
+    // Render rack slots
+    rackUnits.innerHTML = state.discoveredMiners
+        .map((miner) => {
+            const statusClass = miner.is_mining ? 'mining' : miner.is_online ? 'idle' : 'offline';
+            const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
+
+            const hashrate = parseFloat(miner.hashrate_ghs) || 0;
+            const hashrateDisplay = hashrate >= 1000 
+                ? (hashrate / 1000).toFixed(2) + ' TH/s' 
+                : hashrate.toFixed(0) + ' GH/s';
+
+            const temp = miner.temperature_c > 0 ? miner.temperature_c.toFixed(0) + '°C' : '--';
+            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : miner.rated_power_kw.toFixed(2);
+            const fan = miner.fan_speed_pct > 0 ? miner.fan_speed_pct.toFixed(0) + '%' : '--';
+            const efficiency = (hashrate > 0 && miner.power_kw > 0) 
+                ? (hashrate / miner.power_kw / 1000).toFixed(2) + ' TH/kW'
+                : '--';
+            const uptime = miner.uptime_hours > 0 
+                ? (miner.uptime_hours >= 24 
+                    ? Math.floor(miner.uptime_hours / 24) + 'd ' + (miner.uptime_hours % 24).toFixed(0) + 'h'
+                    : miner.uptime_hours.toFixed(1) + 'h')
+                : '--';
+
+            return `
+                <div class="rack-slot ${statusClass}" onclick="openMinerModal('${miner.ip}')" data-ip="${miner.ip}">
+                    <span class="slot-indicator"></span>
+                    <div class="rack-tooltip">
+                        <div class="tooltip-header">
+                            <span class="tooltip-ip">${miner.ip}</span>
+                            <span class="tooltip-status ${statusClass}">${statusText}</span>
+                        </div>
+                        <div class="tooltip-stats">
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Hashrate</span>
+                                <span class="tooltip-stat-value">${hashrateDisplay}</span>
+                            </div>
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Temp</span>
+                                <span class="tooltip-stat-value">${temp}</span>
+                            </div>
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Power</span>
+                                <span class="tooltip-stat-value">${power} kW</span>
+                            </div>
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Fan</span>
+                                <span class="tooltip-stat-value">${fan}</span>
+                            </div>
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Efficiency</span>
+                                <span class="tooltip-stat-value">${efficiency}</span>
+                            </div>
+                            <div class="tooltip-stat">
+                                <span class="tooltip-stat-label">Uptime</span>
+                                <span class="tooltip-stat-value">${uptime}</span>
+                            </div>
+                            <div class="tooltip-stat" style="grid-column: 1 / -1;">
+                                <span class="tooltip-stat-label">Model</span>
+                                <span class="tooltip-stat-value">${escapeHtml(miner.model)}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        })
+        .join('');
+}
+
 function updateHistoryDisplay() {
     const list = $('history-list');
 
@@ -607,7 +717,13 @@ function updateHistoryDisplay() {
 // =========================================================================
 
 async function handleIdleAll() {
-    if (!confirm('Put all miners into idle mode?')) return;
+    const confirmed = await showConfirm({
+        title: 'Idle All Miners',
+        message: 'Put all miners into idle mode?',
+        type: 'warning',
+        confirmText: 'Idle All',
+    });
+    if (!confirmed) return;
 
     try {
         const response = await fetch(`${CONFIG.emsBase}/deactivate`, {
@@ -651,7 +767,13 @@ async function handleResumeAll() {
 }
 
 async function handleEmergencyStop() {
-    if (!confirm('⚠️ EMERGENCY STOP - Are you sure you want to stop all miners immediately?')) return;
+    const confirmed = await showConfirm({
+        title: '⚠️ EMERGENCY STOP',
+        message: 'Are you sure you want to stop all miners immediately?\n\nThis action cannot be undone.',
+        type: 'danger',
+        confirmText: 'Stop All',
+    });
+    if (!confirmed) return;
 
     try {
         const response = await fetch(`${CONFIG.emsBase}/deactivate`, {
@@ -874,17 +996,29 @@ function toggleDropdown(button) {
     }
 }
 
-function confirmReset(minerId) {
+async function confirmReset(minerId) {
     // Close dropdown first
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
     
-    if (confirm('⚠️ FACTORY RESET\n\nThis will clear ALL pool configurations and reset mining settings to defaults.\n\nNetwork settings will NOT be affected.\n\nAre you sure?')) {
+    const confirmed = await showConfirm({
+        title: '⚠️ Factory Reset',
+        message: 'This will clear ALL pool configurations and reset mining settings to defaults.\n\nNetwork settings will NOT be affected.\n\nAre you sure?',
+        type: 'danger',
+        confirmText: 'Reset',
+    });
+    if (confirmed) {
         controlMiner(minerId, 'reset');
     }
 }
 
 async function removeMiner(minerId) {
-    if (!confirm('Remove this miner from the fleet?')) return;
+    const confirmed = await showConfirm({
+        title: 'Remove Miner',
+        message: 'Remove this miner from the fleet?',
+        type: 'warning',
+        confirmText: 'Remove',
+    });
+    if (!confirmed) return;
 
     try {
         const response = await fetch(`${CONFIG.apiBase}/discovery/miners/${minerId}`, {
@@ -912,9 +1046,11 @@ function setViewMode(mode) {
 
     $('view-grid').classList.toggle('active', mode === 'grid');
     $('view-table').classList.toggle('active', mode === 'table');
+    $('view-rack').classList.toggle('active', mode === 'rack');
 
     $('miners-grid').classList.toggle('hidden', mode !== 'grid');
     $('miners-table-container').classList.toggle('hidden', mode !== 'table');
+    $('miners-rack').classList.toggle('hidden', mode !== 'rack');
 
     updateMinersDisplay();
 }
@@ -986,6 +1122,94 @@ function showToast(message, type = 'info') {
         toast.classList.add('fade-out');
         setTimeout(() => toast.remove(), 300);
     }, 3000);
+}
+
+// Custom confirm modal
+function showConfirm(options) {
+    return new Promise((resolve) => {
+        const modal = $('confirm-modal');
+        const iconEl = $('confirm-modal-icon');
+        const titleEl = $('confirm-modal-title');
+        const messageEl = $('confirm-modal-message');
+        const cancelBtn = $('confirm-modal-cancel');
+        const confirmBtn = $('confirm-modal-confirm');
+
+        // Set content
+        titleEl.textContent = options.title || 'Confirm Action';
+        messageEl.textContent = options.message || 'Are you sure you want to proceed?';
+        
+        // Set icon style based on type
+        const type = options.type || 'warning';
+        iconEl.className = 'confirm-modal-icon ' + (type === 'danger' ? 'danger' : type === 'info' ? 'info' : '');
+        
+        // Set icon SVG based on type
+        if (type === 'danger') {
+            iconEl.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+            `;
+        } else {
+            iconEl.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+            `;
+        }
+
+        // Set button text and style
+        cancelBtn.textContent = options.cancelText || 'Cancel';
+        confirmBtn.textContent = options.confirmText || 'Confirm';
+        confirmBtn.className = 'btn ' + (type === 'danger' ? 'btn-danger' : 'btn-primary');
+
+        // Show modal
+        modal.classList.remove('hidden');
+
+        // Cleanup function
+        const cleanup = () => {
+            modal.classList.add('hidden');
+            cancelBtn.removeEventListener('click', handleCancel);
+            confirmBtn.removeEventListener('click', handleConfirm);
+            modal.removeEventListener('click', handleBackdrop);
+            document.removeEventListener('keydown', handleKeydown);
+        };
+
+        const handleCancel = () => {
+            cleanup();
+            resolve(false);
+        };
+
+        const handleConfirm = () => {
+            cleanup();
+            resolve(true);
+        };
+
+        const handleBackdrop = (e) => {
+            if (e.target === modal) {
+                handleCancel();
+            }
+        };
+
+        const handleKeydown = (e) => {
+            if (e.key === 'Escape') {
+                handleCancel();
+            } else if (e.key === 'Enter') {
+                handleConfirm();
+            }
+        };
+
+        cancelBtn.addEventListener('click', handleCancel);
+        confirmBtn.addEventListener('click', handleConfirm);
+        modal.addEventListener('click', handleBackdrop);
+        document.addEventListener('keydown', handleKeydown);
+
+        // Focus confirm button
+        confirmBtn.focus();
+    });
 }
 
 // Make functions globally available
@@ -1078,7 +1302,13 @@ async function handleUpdatePoolAll() {
         return;
     }
 
-    if (!confirm(`Update pool settings on ALL ${state.discoveredMiners.length} miners?`)) return;
+    const confirmed = await showConfirm({
+        title: 'Update All Pools',
+        message: `Update pool settings on ALL ${state.discoveredMiners.length} miners?`,
+        type: 'info',
+        confirmText: 'Update All',
+    });
+    if (!confirmed) return;
 
     showToast('Updating pool on all miners...', 'info');
 

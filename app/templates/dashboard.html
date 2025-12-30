@@ -15,11 +15,21 @@
   <!-- Header -->
   <header class="header">
     <div class="header-left">
-      <h1>
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <div class="brand-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="url(#brandGradient)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <defs>
+            <linearGradient id="brandGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#00c853"/>
+              <stop offset="100%" stop-color="#9c27b0"/>
+            </linearGradient>
+          </defs>
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
-        Net Stabilization
+      </div>
+      <h1>
+        <span class="brand-transmitx">TransmitX</span>
+        <span class="brand-separator">×</span>
+        <span class="brand-cryptohall">Cryptohall24</span>
       </h1>
     </div>
     <div class="header-right">
@@ -75,7 +85,11 @@
               <svg class="fleet-metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
               </svg>
-              <span class="fleet-metric-label">Total Hashrate</span>
+              <span class="fleet-metric-label info-tooltip">
+                Total Hashrate
+                <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span class="info-text">Combined mining power of all active miners. Higher is better for mining revenue.</span>
+              </span>
             </div>
             <div class="fleet-metric-value" id="fleet-hashrate">0.00 TH/s</div>
             <div class="fleet-metric-bar">
@@ -87,7 +101,11 @@
               <svg class="fleet-metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
               </svg>
-              <span class="fleet-metric-label">Avg Temperature</span>
+              <span class="fleet-metric-label info-tooltip">
+                Avg Temperature
+                <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span class="info-text">Average chip temperature across fleet. Ideal range: 60-75°C. Above 80°C may indicate cooling issues.</span>
+              </span>
             </div>
             <div class="fleet-metric-value" id="fleet-temp">-- °C</div>
             <div class="fleet-metric-bar">
@@ -100,7 +118,11 @@
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
-              <span class="fleet-metric-label">Efficiency</span>
+              <span class="fleet-metric-label info-tooltip">
+                Efficiency
+                <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span class="info-text">Hashrate per watt of power. Higher efficiency = lower electricity cost per hash. Modern ASICs: 25-40 J/TH.</span>
+              </span>
             </div>
             <div class="fleet-metric-value" id="fleet-efficiency">-- GH/W</div>
             <div class="fleet-metric-bar">
@@ -130,23 +152,42 @@
 
       <!-- EMS Status Card -->
       <section class="ems-status-card">
-        <h3><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <h3>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M5 12.55a11 11 0 0 1 14.08 0" />
             <path d="M1.42 9a16 16 0 0 1 21.16 0" />
             <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
             <line x1="12" y1="20" x2="12.01" y2="20" />
-          </svg> EMS Protocol Status</h3>
+          </svg>
+          <span class="info-tooltip">
+            EMS Protocol Status
+            <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <span class="info-text">Energy Management System interface. External systems can control the mining fleet via these API endpoints for grid stabilization.</span>
+          </span>
+        </h3>
         <div class="ems-grid">
           <div class="ems-item">
-            <span class="ems-label">Available for Dispatch</span>
+            <span class="ems-label info-tooltip">
+              Available for Dispatch
+              <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span class="info-text">Whether the fleet is ready to respond to EMS power commands. YES means miners are online and controllable.</span>
+            </span>
             <span id="ems-available" class="ems-value status-no">NO</span>
           </div>
           <div class="ems-item">
-            <span class="ems-label">Running Status</span>
+            <span class="ems-label info-tooltip">
+              Running Status
+              <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span class="info-text">Current operational state: STANDBY (idle), RUNNING (mining), ACTIVATING/DEACTIVATING (transitioning).</span>
+            </span>
             <span id="ems-running" class="ems-value">STANDBY</span>
           </div>
           <div class="ems-item">
-            <span class="ems-label">Target Power</span>
+            <span class="ems-label info-tooltip">
+              Target Power
+              <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <span class="info-text">The power consumption target set by EMS or dashboard. Fleet will adjust miner power profiles to match this.</span>
+            </span>
             <span id="ems-target" class="ems-value">-- kW</span>
           </div>
           <div class="ems-item">
@@ -280,20 +321,20 @@
       <div class="control-sections fleet-control-rows">
         <!-- Row 1: Quick Actions -->
         <div class="control-row actions-row">
-          <button id="btn-idle-all" class="btn btn-warning">
+          <button id="btn-idle-all" class="btn btn-warning" title="Stop mining on all units but keep them online and ready">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="6" y="4" width="4" height="16" />
               <rect x="14" y="4" width="4" height="16" />
             </svg>
             Idle All
           </button>
-          <button id="btn-resume-all" class="btn btn-success">
+          <button id="btn-resume-all" class="btn btn-success" title="Resume mining on all idle miners at full rated power">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
             Resume All
           </button>
-          <button id="btn-emergency" class="btn btn-danger">
+          <button id="btn-emergency" class="btn btn-danger" title="Immediately stop all mining operations - use in emergency only">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
             </svg>
@@ -304,22 +345,30 @@
               <input type="checkbox" id="override-toggle">
               <span class="toggle-slider"></span>
             </label>
-            <span class="override-label">Manual Override</span>
+            <span class="override-label info-tooltip">
+              Manual Override
+              <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <span class="info-text">Ignores EMS commands and uses dashboard power target. Enable for manual control or testing.</span>
+            </span>
           </div>
         </div>
 
         <!-- Row 2: Pool Configuration -->
         <div class="control-row pool-row">
-          <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333">
-          <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1">
-          <input type="text" id="pool-password" class="text-input" placeholder="x" value="x">
+          <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333" title="Mining pool URL (stratum protocol)">
+          <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1" title="Worker name (usually wallet.worker)">
+          <input type="text" id="pool-password" class="text-input" placeholder="x" value="x" title="Pool password (usually 'x')">
           <button id="btn-update-pool-all" class="btn btn-primary">Update All</button>
         </div>
 
         <!-- Row 3: Power Target -->
         <div class="control-row power-row">
           <div class="power-slider-mini">
-            <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0">
+            <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0" title="Drag to set target power">
             <div class="slider-labels-mini">
               <span>0</span>
               <span id="slider-value">0.0 kW</span>
@@ -327,7 +376,7 @@
             </div>
           </div>
           <div class="power-input-mini">
-            <input type="number" id="power-input" class="power-input" placeholder="0.0" min="0" step="0.1">
+            <input type="number" id="power-input" class="power-input" placeholder="0.0" min="0" step="0.1" title="Enter exact power target in kW">
             <span class="input-unit">kW</span>
           </div>
           <button id="btn-set-power" class="btn btn-primary">Set Power</button>
@@ -369,6 +418,16 @@
               <line x1="3" y1="18" x2="3.01" y2="18" />
             </svg>
           </button>
+          <button id="view-rack" class="view-btn" title="Rack View">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="2" width="16" height="6" rx="1" />
+              <rect x="4" y="9" width="16" height="6" rx="1" />
+              <rect x="4" y="16" width="16" height="6" rx="1" />
+              <circle cx="8" cy="5" r="1" />
+              <circle cx="8" cy="12" r="1" />
+              <circle cx="8" cy="19" r="1" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -381,6 +440,35 @@
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <span class="placeholder-text">No miners found. Click "Scan Network" to discover miners.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rack View (hidden by default) -->
+      <div id="miners-rack" class="miners-rack hidden">
+        <div class="rack-units" id="rack-units">
+          <!-- Rack units will be rendered here -->
+        </div>
+        <!-- Fixed sidebar for legend and stats -->
+        <div class="rack-sidebar">
+          <div class="rack-legend">
+            <span class="legend-item"><span class="legend-dot mining"></span> Mining</span>
+            <span class="legend-item"><span class="legend-dot idle"></span> Idle</span>
+            <span class="legend-item"><span class="legend-dot offline"></span> Offline</span>
+          </div>
+          <div class="rack-stats">
+            <div class="rack-stat-item">
+              <span class="rack-stat-value" id="rack-total-miners">0</span>
+              <span class="rack-stat-label">Miners</span>
+            </div>
+            <div class="rack-stat-item">
+              <span class="rack-stat-value" id="rack-total-hashrate">0 TH/s</span>
+              <span class="rack-stat-label">Hashrate</span>
+            </div>
+            <div class="rack-stat-item">
+              <span class="rack-stat-value" id="rack-total-power">0 kW</span>
+              <span class="rack-stat-label">Power</span>
+            </div>
           </div>
         </div>
       </div>
@@ -552,6 +640,25 @@
       </div>
       <div class="modal-footer">
         <button id="btn-scan-close" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Dialog Modal -->
+  <div id="confirm-modal" class="confirm-modal-overlay hidden">
+    <div class="confirm-modal">
+      <div class="confirm-modal-icon" id="confirm-modal-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+      </div>
+      <h3 class="confirm-modal-title" id="confirm-modal-title">Confirm Action</h3>
+      <p class="confirm-modal-message" id="confirm-modal-message">Are you sure you want to proceed?</p>
+      <div class="confirm-modal-actions">
+        <button id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="confirm-modal-confirm" class="btn btn-primary">Confirm</button>
       </div>
     </div>
   </div>
