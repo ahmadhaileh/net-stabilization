@@ -89,3 +89,4 @@ logs/
 # Local development overrides
 .env.local
 .env.*.local
+nohup.out
