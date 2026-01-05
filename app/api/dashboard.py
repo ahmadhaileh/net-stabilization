@@ -16,6 +16,7 @@ from app.models.state import FleetStatus, MinerState, CommandLog, SystemConfig
 from app.services.fleet_manager import get_fleet_manager
 from app.services.awesome_miner import get_awesome_miner_client
 from app.services.miner_discovery import get_discovery_service
+from app.services.vnish_power import get_vnish_power_service, VALID_FREQUENCIES
 
 logger = structlog.get_logger()
 
@@ -39,6 +40,7 @@ class FleetStatusResponse(BaseModel):
     last_update: datetime
     last_ems_command: Optional[datetime]
     errors: List[str]
+    power_control_mode: str = "on_off"  # "frequency" or "on_off"
 
 
 class MinerStatusResponse(BaseModel):
@@ -106,7 +108,8 @@ async def get_fleet_status():
         override_target_power_kw=s.override_target_power_kw,
         last_update=s.last_update,
         last_ems_command=s.last_ems_command,
-        errors=s.errors
+        errors=s.errors,
+        power_control_mode=fleet_manager.power_control_mode
     )
 
 
@@ -164,6 +167,48 @@ async def get_miner_status(miner_id: int):
 # =========================================================================
 # Control Endpoints
 # =========================================================================
+
+class PowerModeRequest(BaseModel):
+    """Request to set power control mode."""
+    mode: str = Field(..., pattern="^(frequency|on_off)$")
+
+
+@router.get(
+    "/power-mode",
+    summary="Get power control mode"
+)
+async def get_power_mode():
+    """Get the current power control mode."""
+    fleet_manager = get_fleet_manager()
+    return {
+        "mode": fleet_manager.power_control_mode
+    }
+
+
+@router.post(
+    "/power-mode",
+    summary="Set power control mode"
+)
+async def set_power_mode(request: PowerModeRequest):
+    """
+    Set the power control mode.
+    
+    Modes:
+    - frequency: Fine-grained control via frequency scaling (300-650 MHz)
+    - on_off: Simple on/off control per miner (coarser but more reliable)
+    """
+    fleet_manager = get_fleet_manager()
+    
+    try:
+        fleet_manager.power_control_mode = request.mode
+        return {
+            "success": True,
+            "message": f"Power control mode set to {request.mode}",
+            "mode": request.mode
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post(
     "/override",
@@ -681,6 +726,296 @@ async def fan_test_get_status(miner_ip: str):
         "status": status_result,
         "config": config_result
     }
+
+
+# =========================================================================
+# Power Control Endpoints (Fractional Power via Frequency Scaling)
+# =========================================================================
+
+class PowerAllocationRequest(BaseModel):
+    """Request for power allocation calculation."""
+    target_power_kw: float = Field(..., ge=0, description="Target power in kilowatts")
+
+
+class MinerFrequencyRequest(BaseModel):
+    """Request to set miner frequency."""
+    miner_ip: str = Field(..., description="Miner IP address")
+    frequency_mhz: int = Field(..., ge=100, le=1175, description="Frequency in MHz")
+    voltage: Optional[float] = Field(None, ge=7.9, le=9.5, description="Voltage (auto-selected if not specified)")
+
+
+class PowerAllocationResponse(BaseModel):
+    """Response showing power allocation for each miner."""
+    ip: str
+    action: str  # 'full', 'swing', or 'idle'
+    frequency: int
+    voltage: float
+    estimated_power: int
+
+
+@router.get(
+    "/power/frequencies",
+    summary="Get valid frequencies"
+)
+async def get_valid_frequencies():
+    """
+    Get list of valid frequencies for Vnish firmware.
+    
+    These are the frequency values available in the web UI dropdown.
+    """
+    vnish = get_vnish_power_service()
+    
+    return {
+        "valid_frequencies": VALID_FREQUENCIES,
+        "min_frequency": vnish.min_frequency,
+        "max_frequency": vnish.max_frequency,
+        "default_frequency": vnish.default_frequency
+    }
+
+
+@router.get(
+    "/power/curve",
+    summary="Get power-frequency curve"
+)
+async def get_power_curve():
+    """
+    Get the power-frequency mapping curve for S9 miners.
+    
+    This shows the relationship between frequency and power consumption,
+    used for fractional power control calculations.
+    """
+    vnish = get_vnish_power_service()
+    
+    return {
+        "curve": [
+            {
+                "frequency_mhz": point.frequency_mhz,
+                "power_watts": point.power_watts,
+                "hashrate_ths": point.hashrate_ths,
+                "voltage": point.voltage
+            }
+            for point in vnish.power_curve
+        ]
+    }
+
+
+@router.post(
+    "/power/calculate",
+    summary="Calculate power allocation"
+)
+async def calculate_power_allocation(request: PowerAllocationRequest):
+    """
+    Calculate power allocation for a target power level.
+    
+    Returns how each miner should be configured (full/swing/idle)
+    without actually applying the changes.
+    
+    Strategy: "Full + Swing"
+    - Full power miners run at default frequency (650MHz)
+    - One "swing" miner runs at variable frequency for remainder
+    - Remaining miners stay idle
+    """
+    settings = get_settings()
+    
+    if not settings.miner_discovery_enabled:
+        return {"error": "Power control only available in direct mode"}
+    
+    discovery = get_discovery_service()
+    vnish = get_vnish_power_service()
+    
+    # Get all online miners
+    miners = [
+        {'ip': m.ip, 'id': m.id, 'is_mining': m.is_mining, 'is_online': m.is_online}
+        for m in discovery.miners
+        if m.is_online
+    ]
+    
+    if not miners:
+        return {
+            "target_power_kw": request.target_power_kw,
+            "allocation": [],
+            "summary": {
+                "full_miners": 0,
+                "swing_miners": 0,
+                "idle_miners": 0,
+                "estimated_power_watts": 0,
+                "estimated_power_kw": 0
+            },
+            "error": "No online miners"
+        }
+    
+    # Calculate allocation
+    allocation = vnish.get_power_allocation(
+        request.target_power_kw,
+        miners,
+        full_power_watts=1460
+    )
+    
+    # Summarize
+    full_count = sum(1 for a in allocation if a['action'] == 'full')
+    swing_count = sum(1 for a in allocation if a['action'] == 'swing')
+    idle_count = sum(1 for a in allocation if a['action'] == 'idle')
+    total_power = sum(a['estimated_power'] for a in allocation)
+    
+    return {
+        "target_power_kw": request.target_power_kw,
+        "allocation": allocation,
+        "summary": {
+            "full_miners": full_count,
+            "swing_miners": swing_count,
+            "idle_miners": idle_count,
+            "estimated_power_watts": total_power,
+            "estimated_power_kw": round(total_power / 1000, 2)
+        }
+    }
+
+
+@router.post(
+    "/power/apply",
+    summary="Apply power allocation"
+)
+async def apply_power_allocation(request: PowerAllocationRequest):
+    """
+    Calculate and apply power allocation for a target power level.
+    
+    This actually changes miner frequencies and turns miners on/off
+    to achieve the target power consumption.
+    """
+    settings = get_settings()
+    
+    if not settings.miner_discovery_enabled:
+        return {"error": "Power control only available in direct mode"}
+    
+    fleet_manager = get_fleet_manager()
+    
+    # Use the fleet manager's activate method which now supports fractional power
+    success, message = await fleet_manager.activate(request.target_power_kw)
+    
+    return {
+        "success": success,
+        "message": message,
+        "target_power_kw": request.target_power_kw
+    }
+
+
+@router.post(
+    "/power/set-frequency",
+    summary="Set miner frequency"
+)
+async def set_miner_frequency(request: MinerFrequencyRequest):
+    """
+    Set a specific miner's frequency directly.
+    
+    This allows manual fine-tuning of individual miners.
+    The miner will restart CGMiner to apply the new frequency.
+    """
+    settings = get_settings()
+    
+    if not settings.miner_discovery_enabled:
+        return {"error": "Frequency control only available in direct mode"}
+    
+    vnish = get_vnish_power_service()
+    
+    # Get voltage if not specified
+    voltage = request.voltage
+    if voltage is None:
+        voltage = vnish.get_voltage_for_frequency(request.frequency_mhz)
+    
+    # Set frequency
+    success, message = await vnish.set_miner_frequency(
+        host=request.miner_ip,
+        frequency_mhz=request.frequency_mhz,
+        voltage=voltage
+    )
+    
+    # Estimate new power
+    estimated_power = vnish.frequency_to_power(request.frequency_mhz)
+    
+    return {
+        "success": success,
+        "message": message,
+        "miner_ip": request.miner_ip,
+        "frequency_mhz": request.frequency_mhz,
+        "voltage": voltage,
+        "estimated_power_watts": estimated_power
+    }
+
+
+@router.get(
+    "/power/miner/{miner_ip}",
+    summary="Get miner power info"
+)
+async def get_miner_power_info(miner_ip: str):
+    """
+    Get current power-related info for a specific miner.
+    
+    Returns current frequency, voltage, and estimated power consumption.
+    """
+    settings = get_settings()
+    
+    if not settings.miner_discovery_enabled:
+        return {"error": "Power info only available in direct mode"}
+    
+    vnish = get_vnish_power_service()
+    
+    # Get current frequency
+    frequency = await vnish.get_miner_frequency(miner_ip)
+    
+    if frequency is None:
+        return {
+            "miner_ip": miner_ip,
+            "error": "Could not get miner frequency"
+        }
+    
+    # Calculate power estimate
+    voltage = vnish.get_voltage_for_frequency(frequency)
+    estimated_power = vnish.frequency_to_power(frequency)
+    
+    return {
+        "miner_ip": miner_ip,
+        "frequency_mhz": frequency,
+        "voltage": voltage,
+        "estimated_power_watts": estimated_power,
+        "estimated_power_kw": round(estimated_power / 1000, 2)
+    }
+
+
+@router.post(
+    "/power/convert",
+    summary="Convert between power and frequency"
+)
+async def convert_power_frequency(
+    power_watts: Optional[int] = None,
+    frequency_mhz: Optional[int] = None
+):
+    """
+    Convert between power and frequency values.
+    
+    Provide either power_watts OR frequency_mhz to get the other.
+    """
+    vnish = get_vnish_power_service()
+    
+    if power_watts is not None:
+        # Convert power to frequency
+        freq, voltage = vnish.power_to_frequency(power_watts)
+        return {
+            "input_power_watts": power_watts,
+            "frequency_mhz": freq,
+            "voltage": voltage,
+            "actual_power_watts": vnish.frequency_to_power(freq)
+        }
+    elif frequency_mhz is not None:
+        # Convert frequency to power
+        power = vnish.frequency_to_power(frequency_mhz)
+        voltage = vnish.get_voltage_for_frequency(frequency_mhz)
+        return {
+            "input_frequency_mhz": frequency_mhz,
+            "power_watts": power,
+            "power_kw": round(power / 1000, 2),
+            "voltage": voltage
+        }
+    else:
+        return {"error": "Provide either power_watts or frequency_mhz"}
 
 
 # =========================================================================

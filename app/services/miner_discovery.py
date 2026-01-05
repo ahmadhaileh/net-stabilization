@@ -143,6 +143,26 @@ class DiscoveredMiner:
     discovery_time: datetime = field(default_factory=datetime.utcnow)
     consecutive_failures: int = 0
     
+    # State transition tracking - miners take 45-60s to wake from idle
+    last_command_time: Optional[datetime] = None
+    last_command_type: Optional[str] = None  # 'wake', 'sleep', 'restart', 'reboot', 'config'
+    transition_grace_seconds: int = 60  # Grace period after commands
+    
+    @property
+    def is_transitioning(self) -> bool:
+        """Check if miner is in a state transition grace period."""
+        if not self.last_command_time:
+            return False
+        elapsed = (datetime.utcnow() - self.last_command_time).total_seconds()
+        return elapsed < self.transition_grace_seconds
+    
+    def mark_command_sent(self, command_type: str, grace_seconds: int = None):
+        """Mark that a command was sent to this miner."""
+        self.last_command_time = datetime.utcnow()
+        self.last_command_type = command_type
+        if grace_seconds:
+            self.transition_grace_seconds = grace_seconds
+    
     @property
     def id(self) -> str:
         """Unique identifier based on IP."""
@@ -914,6 +934,12 @@ class MinerDiscoveryService:
         self.scan_timeout = scan_timeout
         self.api_timeout = api_timeout
         
+        # Database service for persistence
+        from app.database import get_db_service
+        from app.config import get_settings
+        self.db = get_db_service()
+        settings = get_settings()
+        
         # Registry of discovered miners
         self._miners: Dict[str, DiscoveredMiner] = {}
         
@@ -929,6 +955,10 @@ class MinerDiscoveryService:
         self._active_pool_url: str = ""
         self._active_pool_user: str = ""
         self._active_pool_pass: str = ""
+        
+        # Snapshot timing - track last snapshot time per miner
+        self._last_snapshot_time: Dict[str, datetime] = {}
+        self._snapshot_interval = settings.snapshot_interval_seconds
     
     def _estimate_antminer_power(self, model: str) -> float:
         """Estimate rated power for Antminer models in watts."""
@@ -959,6 +989,56 @@ class MinerDiscoveryService:
         
         # Default for unknown models
         return 3000.0
+    
+    def _save_miner_to_db(self, miner: DiscoveredMiner):
+        """Save or update miner in database."""
+        try:
+            self.db.upsert_miner(
+                ip=miner.ip,
+                name=miner.hostname or f"Miner-{miner.ip.split('.')[-1]}",
+                model=miner.model,
+                firmware=miner.firmware_type.value if miner.firmware_type else None,
+                firmware_version=miner.firmware_version,
+                mac_address=miner.mac_address,
+                rated_power_watts=int(miner.rated_power_watts) if miner.rated_power_watts else 1400,
+                pool_url=miner.pool_url,
+                pool_worker=None  # Not currently tracked
+            )
+        except Exception as e:
+            logger.debug("Failed to save miner to database", ip=miner.ip, error=str(e))
+    
+    def _should_save_snapshot(self, miner_id: str) -> bool:
+        """Check if enough time has passed to save a new snapshot."""
+        now = datetime.utcnow()
+        last_time = self._last_snapshot_time.get(miner_id)
+        
+        if last_time is None:
+            return True
+        
+        elapsed = (now - last_time).total_seconds()
+        return elapsed >= self._snapshot_interval
+    
+    def _save_miner_snapshot(self, miner: DiscoveredMiner):
+        """Save miner snapshot for historical data (time-throttled)."""
+        # Check if we should save (time-based throttling)
+        if not self._should_save_snapshot(miner.id):
+            return
+        
+        try:
+            self.db.save_miner_snapshot(
+                miner_ip=miner.ip,
+                hashrate_ghs=miner.hashrate_ghs,
+                power_watts=miner.power_watts,
+                temperature=miner.temperature_c,
+                fan_speed=miner.fan_speed_pct,
+                frequency=miner.current_frequency,
+                is_mining=miner.is_mining,
+                uptime_seconds=miner.uptime_seconds
+            )
+            # Update last snapshot time on success
+            self._last_snapshot_time[miner.id] = datetime.utcnow()
+        except Exception as e:
+            logger.debug("Failed to save miner snapshot", ip=miner.ip, error=str(e))
     
     @property
     def miners(self) -> List[DiscoveredMiner]:
@@ -1021,6 +1101,8 @@ class MinerDiscoveryService:
                 discovered.append(result)
                 async with self._lock:
                     self._miners[result.id] = result
+                    # Save to database
+                    self._save_miner_to_db(result)
         
         logger.info(
             "Discovery complete",
@@ -1203,9 +1285,9 @@ class MinerDiscoveryService:
         try:
             stats = await api.get_stats()
             await self._extract_power_info(miner, stats)
-            # If we got actual power reading, use that as rated power estimate
-            if miner.power_watts > 0:
-                # Add 10% margin for rated power
+            # Only update rated power if current reading is HIGHER than estimate
+            # (miner might be running at reduced frequency)
+            if miner.power_watts > miner.rated_power_watts:
                 miner.rated_power_watts = miner.power_watts * 1.1
         except Exception:
             pass
@@ -1326,6 +1408,22 @@ class MinerDiscoveryService:
             except Exception:
                 pass
             
+            # Get current frequency from miner config (for frequency-based power control)
+            try:
+                vnish = VnishWebAPI(miner.ip)
+                config = await vnish.get_config()
+                freq_str = config.get("bitmain-freq", "")
+                if freq_str:
+                    miner.current_frequency = int(freq_str)
+                    logger.debug(
+                        "Read miner frequency",
+                        miner_id=miner_id,
+                        ip=miner.ip,
+                        frequency=miner.current_frequency
+                    )
+            except Exception:
+                pass
+            
             return miner
             
         except ConnectionError:
@@ -1352,7 +1450,21 @@ class MinerDiscoveryService:
             except Exception as e:
                 logger.debug("Vnish Web API also not available", ip=miner.ip, error=str(e))
             
-            # Neither CGMiner API nor Vnish Web API responding - truly offline
+            # Neither CGMiner API nor Vnish Web API responding
+            # But if we recently sent a command, the miner might be transitioning
+            if miner.is_transitioning:
+                # Keep current online state during transition grace period
+                logger.debug(
+                    "Miner not responding but in transition grace period",
+                    miner_id=miner_id,
+                    ip=miner.ip,
+                    command=miner.last_command_type,
+                    elapsed_s=(datetime.utcnow() - miner.last_command_time).total_seconds()
+                )
+                # Don't mark offline during transition, but don't reset failures either
+                return miner
+            
+            # Truly offline - not in transition
             miner.is_online = False
             miner.is_mining = False
             miner.consecutive_failures += 1
@@ -1374,6 +1486,8 @@ class MinerDiscoveryService:
         for result in results:
             if isinstance(result, DiscoveredMiner):
                 updated.append(result)
+                # Save snapshot for historical data
+                self._save_miner_snapshot(result)
         
         return updated
     
@@ -1443,6 +1557,9 @@ class MinerDiscoveryService:
         This is a quick restart that just restarts the mining software
         without rebooting the entire system.
         
+        NOTE: The miner typically doesn't send a response - it just restarts.
+        The restart takes ~30-45 seconds to complete.
+        
         Args:
             miner_id: The miner to restart
             
@@ -1453,13 +1570,20 @@ class MinerDiscoveryService:
         if not miner:
             return False, f"Miner {miner_id} not found"
         
+        # Mark that we're sending a restart command - miner will be unavailable
+        miner.mark_command_sent('restart', grace_seconds=60)
+        
         # Try Vnish Web API first for more reliable restart
         vnish = VnishWebAPI(miner.ip)
         try:
             if await vnish.is_vnish_available():
-                if await vnish.start_cgminer():
-                    logger.info("Miner soft restart via Vnish API", miner_id=miner_id, ip=miner.ip)
-                    return True, "CGMiner restart initiated via Vnish API"
+                try:
+                    await vnish.start_cgminer()
+                except Exception:
+                    # Restart command often doesn't return a response - that's OK
+                    pass
+                logger.info("Miner soft restart initiated via Vnish API", miner_id=miner_id, ip=miner.ip)
+                return True, "CGMiner restart initiated (takes ~30-45s)"
         except Exception as e:
             logger.debug("Vnish restart failed, trying CGMiner API", error=str(e))
         
@@ -1468,18 +1592,21 @@ class MinerDiscoveryService:
         
         try:
             await api.send_command("restart")
-            logger.info("Miner restart command sent", miner_id=miner_id)
-            return True, "Restart command sent"
-        except Exception as e:
-            logger.error("Failed to restart miner", miner_id=miner_id, error=str(e))
-            return False, f"Restart failed: {e}"
+        except Exception:
+            # Restart command often doesn't return a response - that's expected
+            pass
+        
+        logger.info("Miner restart command sent", miner_id=miner_id)
+        return True, "Restart command sent (takes ~30-45s)"
     
     async def reboot_miner(self, miner_id: str) -> Tuple[bool, str]:
         """
         Full system reboot of a miner.
         
         This reboots the entire system, not just the mining software.
-        Takes approximately 60-90 seconds to complete.
+        Takes approximately 90-120 seconds to complete.
+        
+        NOTE: The miner typically doesn't send a response - it just reboots.
         
         Args:
             miner_id: The miner to reboot
@@ -1491,17 +1618,23 @@ class MinerDiscoveryService:
         if not miner:
             return False, f"Miner {miner_id} not found"
         
+        # Mark that we're sending a reboot command - miner will be unavailable for a while
+        miner.mark_command_sent('reboot', grace_seconds=120)
+        
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            if await vnish.reboot_system():
-                logger.info("Miner full reboot initiated", miner_id=miner_id, ip=miner.ip)
-                return True, "System reboot initiated (takes ~60-90 seconds)"
-            else:
-                return False, "Reboot command failed"
+            # Reboot command usually doesn't return a response
+            try:
+                await vnish.reboot_system()
+            except Exception:
+                # No response expected - miner is rebooting
+                pass
+            logger.info("Miner full reboot initiated", miner_id=miner_id, ip=miner.ip)
+            return True, "System reboot initiated (takes ~90-120 seconds)"
         except Exception as e:
-            logger.error("Failed to reboot miner", miner_id=miner_id, ip=miner.ip, error=str(e))
-            return False, f"Reboot failed: {e}"
+            logger.error("Failed to send reboot command", miner_id=miner_id, ip=miner.ip, error=str(e))
+            return False, f"Reboot command failed: {e}"
 
     async def blink_miner(self, miner_ip: str) -> Tuple[bool, str]:
         """
@@ -1669,6 +1802,9 @@ class MinerDiscoveryService:
         try:
             logger.info("Setting miner to sleep mode", ip=miner.ip)
             
+            # Mark that we're sending a command - miner may fluctuate for ~30s
+            miner.mark_command_sent('sleep', grace_seconds=45)
+            
             # Use sleep mode API directly - don't check is_vnish_available
             # because that might fail if CGMiner is already in a weird state
             if await vnish.set_sleep_mode(enable=True):
@@ -1690,20 +1826,29 @@ class MinerDiscoveryService:
         Wake miner from sleep mode using Vnish sleep mode API.
         
         This uses the do_sleep_mode.cgi endpoint with mode=0 which
-        instantly wakes the miner and resumes mining (10-15 seconds).
+        wakes the miner and resumes mining.
+        
+        NOTE: Waking takes 45-60 seconds. During this time:
+        - Miner may appear offline briefly
+        - Then idle again
+        - Then finally mining
         """
         vnish = VnishWebAPI(miner.ip)
         
         try:
             logger.info("Waking miner from sleep mode", ip=miner.ip)
             
+            # Mark that we're sending a wake command
+            # Waking takes 45-60s, during which the miner status will fluctuate
+            miner.mark_command_sent('wake', grace_seconds=75)
+            
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
             if await vnish.set_sleep_mode(enable=False):
                 miner.power_mode = MinerPowerMode.NORMAL
-                miner.is_mining = True  # Will be confirmed on next status update
-                logger.info("Miner woke from sleep mode", ip=miner.ip)
-                return True, "Miner woke from sleep - resuming mining"
+                # Don't set is_mining=True yet - will be confirmed on next status update
+                logger.info("Miner wake command sent - will take 45-60s to resume", ip=miner.ip)
+                return True, "Wake command sent - miner resuming (takes ~45-60s)"
             else:
                 logger.warning("Wake from sleep command failed", ip=miner.ip)
                 return False, "Failed to wake from sleep"
@@ -1742,6 +1887,9 @@ class MinerDiscoveryService:
         try:
             if not await vnish.is_vnish_available():
                 return False, "Vnish Web API not available - frequency control requires Vnish firmware"
+            
+            # Mark that we're sending a config change - saving config may reboot the miner
+            miner.mark_command_sent('config', grace_seconds=120)
             
             result = await vnish.set_vnish_profile(frequency=str(frequency))
             
@@ -1825,6 +1973,8 @@ class MinerDiscoveryService:
             miner.rated_power_watts = rated_power_watts
             async with self._lock:
                 self._miners[miner.id] = miner
+            # Save to database
+            self._save_miner_to_db(miner)
             logger.info("Miner added manually", ip=ip, model=miner.model)
             return True, miner
         else:

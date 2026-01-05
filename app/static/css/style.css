@@ -248,7 +248,9 @@ select option {
    ======================================================================== */
 
 .header {
-    background: linear-gradient(135deg, rgba(0, 200, 83, 0.08) 0%, var(--bg-surface) 50%, rgba(156, 39, 176, 0.08) 100%);
+    background: linear-gradient(135deg, rgba(0, 200, 83, 0.08) 0%, rgba(15, 20, 25, 0.85) 50%, rgba(156, 39, 176, 0.08) 100%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid transparent;
     border-image: linear-gradient(90deg, var(--accent-primary), var(--accent-purple)) 1;
     padding: var(--space-3) var(--space-6);
@@ -370,6 +372,40 @@ svg.icon {
     border-radius: var(--radius-md);
     font-size: 0.75rem;
     color: var(--text-secondary);
+}
+
+/* Header Select (Power Mode) */
+.header-select {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-6) var(--space-1) var(--space-2);
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%238b949e' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 4px center;
+    background-repeat: no-repeat;
+    background-size: 14px;
+    min-width: 90px;
+}
+
+.header-select:hover {
+    border-color: var(--accent-primary);
+}
+
+.header-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-primary-muted);
+}
+
+.header-select option {
+    background: var(--bg-surface);
+    color: var(--text-primary);
 }
 
 .status-dot {
@@ -909,6 +945,159 @@ svg.icon {
 .control-row.power-row .btn {
     flex-shrink: 0;
     margin-top: 2px;
+}
+
+/* Row 4: Power Allocation Preview */
+.control-row.power-allocation-row {
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    margin-top: var(--space-2);
+}
+
+.control-row.power-allocation-row.hidden {
+    display: none;
+}
+
+.allocation-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+}
+
+.allocation-header h4 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.allocation-header h4 .icon {
+    width: 16px;
+    height: 16px;
+    stroke: var(--accent-primary);
+}
+
+.allocation-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+}
+
+.allocation-summary .summary-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.allocation-summary .summary-item .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.allocation-summary .summary-item.full .dot {
+    background: var(--accent-success);
+    box-shadow: 0 0 8px var(--accent-success);
+}
+
+.allocation-summary .summary-item.swing .dot {
+    background: var(--accent-warning-bright);
+    box-shadow: 0 0 8px var(--accent-warning-bright);
+}
+
+.allocation-summary .summary-item.idle .dot {
+    background: var(--text-tertiary);
+}
+
+.allocation-summary .summary-total {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding-left: var(--space-3);
+    border-left: 1px solid var(--border-subtle);
+}
+
+.allocation-summary .summary-total strong {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.allocation-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-2);
+}
+
+.allocation-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    font-size: 0.85rem;
+}
+
+.allocation-item .status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.allocation-item.full .status-indicator {
+    background: var(--accent-success);
+    box-shadow: 0 0 6px var(--accent-success);
+}
+
+.allocation-item.swing .status-indicator {
+    background: var(--accent-warning-bright);
+    box-shadow: 0 0 6px var(--accent-warning-bright);
+}
+
+.allocation-item.idle .status-indicator {
+    background: var(--text-tertiary);
+}
+
+.allocation-item .miner-ip {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.allocation-item .miner-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-left: auto;
+    text-align: right;
+}
+
+.allocation-item .miner-freq {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.allocation-item .miner-power {
+    font-size: 0.75rem;
+    color: var(--accent-primary);
+    font-weight: 500;
+}
+
+.allocation-item.idle .miner-power {
+    color: var(--text-tertiary);
 }
 
 @media (max-width: 768px) {

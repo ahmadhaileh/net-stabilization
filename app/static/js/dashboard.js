@@ -41,11 +41,15 @@ function setupEventListeners() {
 
     // Power control
     $('btn-set-power')?.addEventListener('click', handleSetPower);
+    $('btn-preview-power')?.addEventListener('click', handlePreviewPower);
     $('power-slider')?.addEventListener('input', handleSliderChange);
     $('power-input')?.addEventListener('change', handlePowerInputChange);
 
     // Override toggle
     $('override-toggle')?.addEventListener('change', handleOverrideToggle);
+    
+    // Power mode select
+    $('power-mode-select')?.addEventListener('change', handlePowerModeChange);
 
     // Discovery
     $('btn-scan')?.addEventListener('click', handleScan);
@@ -226,6 +230,9 @@ function updateStatusDisplay() {
         overrideBadge.classList.add('hidden');
         $('override-toggle').checked = false;
     }
+    
+    // Power mode toggle
+    updatePowerModeDisplay(state.status.power_control_mode);
 
     // Calculate total hashrate
     updateTotalHashrate();
@@ -821,12 +828,73 @@ async function handleSetPower() {
 
         if (data.accepted) {
             showToast(`Target power set to ${power} kW`, 'success');
+            // Hide allocation preview after applying
+            $('power-allocation-section')?.classList.add('hidden');
         } else {
             showToast(data.message || 'Failed to set power target', 'error');
         }
         await fetchStatus();
     } catch (error) {
         showToast('Error setting power target', 'error');
+    }
+}
+
+async function handlePreviewPower() {
+    const power = parseFloat($('power-input').value);
+    if (isNaN(power) || power < 0) {
+        showToast('Please enter a valid power value', 'error');
+        return;
+    }
+
+    const allocationSection = $('power-allocation-section');
+    const allocationList = $('allocation-list');
+
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/power/calculate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_power_kw: power }),
+        });
+        const data = await response.json();
+
+        if (data.error) {
+            showToast(data.error, 'error');
+            return;
+        }
+
+        // Update summary counts
+        $('alloc-full-count').textContent = data.summary?.full_miners || 0;
+        $('alloc-swing-count').textContent = data.summary?.swing_miners || 0;
+        $('alloc-idle-count').textContent = data.summary?.idle_miners || 0;
+        $('alloc-estimated-power').textContent = data.summary?.estimated_power_kw?.toFixed(2) || '0.0';
+
+        // Render allocation items
+        if (allocationList) {
+            allocationList.innerHTML = (data.allocation || []).map(alloc => {
+                const actionClass = alloc.action;
+                const freqText = alloc.action === 'idle' ? 'Idle' : `${alloc.frequency}MHz`;
+                const powerText = alloc.action === 'idle' ? '0W' : `~${alloc.estimated_power}W`;
+                
+                return `
+                    <div class="allocation-item ${actionClass}">
+                        <span class="status-indicator"></span>
+                        <span class="miner-ip">${alloc.ip}</span>
+                        <div class="miner-details">
+                            <span class="miner-freq">${freqText}</span>
+                            <span class="miner-power">${powerText}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Show the section
+        allocationSection?.classList.remove('hidden');
+        showToast(`Preview: ${data.summary?.full_miners || 0} full + ${data.summary?.swing_miners || 0} swing miners`, 'info');
+
+    } catch (error) {
+        console.error('Failed to preview power allocation:', error);
+        showToast('Error calculating power allocation', 'error');
     }
 }
 
@@ -868,6 +936,38 @@ async function handleOverrideToggle(e) {
     } catch (error) {
         showToast('Error toggling override', 'error');
         e.target.checked = !enabled;
+    }
+}
+
+// Power Mode Select Functions
+function updatePowerModeDisplay(mode) {
+    const select = $('power-mode-select');
+    if (select) {
+        select.value = mode;
+    }
+}
+
+async function handlePowerModeChange(e) {
+    const mode = e.target.value;
+    const previousValue = mode === 'frequency' ? 'on_off' : 'frequency';
+    
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/power-mode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: mode }),
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast(`Power mode: ${mode === 'frequency' ? 'Frequency' : 'On/Off'}`, 'success');
+        } else {
+            showToast(data.message || 'Failed to change power mode', 'error');
+            e.target.value = previousValue; // Revert
+        }
+    } catch (error) {
+        showToast('Error changing power mode', 'error');
+        e.target.value = previousValue; // Revert
     }
 }
 

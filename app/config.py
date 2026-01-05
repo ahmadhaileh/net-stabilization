@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     
     # Polling Configuration
     poll_interval_seconds: int = 5
+    snapshot_interval_seconds: int = 60  # Save snapshots every 60s (not every poll)
+    snapshot_retention_hours: int = 24  # Keep detailed snapshots for 24 hours
     
     # Database
     database_url: str = "sqlite+aiosqlite:///./data/netstab.db"
@@ -45,7 +47,12 @@ class Settings(BaseSettings):
     rated_power_kw: Optional[float] = None  # Auto-calculated if not set
     min_power_threshold_kw: float = 0.1  # Lower threshold for activation
     power_ramp_rate_kw_per_sec: float = 50.0
-    idle_all_on_startup: bool = True  # Idle all miners when system starts
+    idle_all_on_startup: bool = False  # Don't idle miners on startup - let them keep their current state
+    
+    # Power Control Mode:
+    # - "frequency": Use frequency scaling for fine-grained power control (requires working API)
+    # - "on_off": Simple on/off control per miner (more reliable, coarser granularity)
+    power_control_mode: str = "on_off"  # Default to more reliable on/off mode
     
     @property
     def awesome_miner_base_url(self) -> str:

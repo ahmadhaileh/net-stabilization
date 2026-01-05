@@ -34,6 +34,13 @@
     </div>
     <div class="header-right">
       <div class="header-stat">
+        <span class="stat-label">Power Mode</span>
+        <select id="power-mode-select" class="header-select">
+          <option value="on_off">On/Off</option>
+          <option value="frequency">Frequency</option>
+        </select>
+      </div>
+      <div class="header-stat">
         <span class="stat-label">Total Hashrate</span>
         <span class="stat-value" id="total-hashrate">0 GH/s</span>
       </div>
@@ -380,6 +387,45 @@
             <span class="input-unit">kW</span>
           </div>
           <button id="btn-set-power" class="btn btn-primary">Set Power</button>
+          <button id="btn-preview-power" class="btn btn-secondary" title="Preview how power will be allocated across miners">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            Preview
+          </button>
+        </div>
+
+        <!-- Row 4: Power Allocation Preview (hidden by default) -->
+        <div id="power-allocation-section" class="control-row power-allocation-row hidden">
+          <div class="allocation-header">
+            <h4>
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              Power Allocation Preview
+            </h4>
+            <div class="allocation-summary">
+              <span class="summary-item full">
+                <span class="dot full"></span>
+                <span id="alloc-full-count">0</span> Full Power
+              </span>
+              <span class="summary-item swing">
+                <span class="dot swing"></span>
+                <span id="alloc-swing-count">0</span> Swing
+              </span>
+              <span class="summary-item idle">
+                <span class="dot idle"></span>
+                <span id="alloc-idle-count">0</span> Idle
+              </span>
+              <span class="summary-total">
+                Est: <strong id="alloc-estimated-power">0.0</strong> kW
+              </span>
+            </div>
+          </div>
+          <div id="allocation-list" class="allocation-list">
+            <!-- Allocation items will be rendered here -->
+          </div>
         </div>
       </div>
     </section>

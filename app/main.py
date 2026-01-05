@@ -4,6 +4,8 @@ Net Stabilization - Mining Fleet Power Control System
 Main FastAPI application entry point.
 """
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -14,6 +16,14 @@ from fastapi.middleware.cors import CORSMiddleware
 import structlog
 
 from app.config import get_settings
+
+# Configure Python's logging first (required for structlog stdlib integration)
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    format="%(message)s",
+    stream=__import__('sys').stdout,
+    level=getattr(logging, log_level, logging.INFO),
+)
 from app.api.ems import router as ems_router
 from app.api.dashboard import router as dashboard_router
 from app.services.fleet_manager import get_fleet_manager
