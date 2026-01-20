@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0  
 **Last Updated:** January 20, 2026  
-**Base URL:** `http://<server-ip>:8000`
+**Base URL:** `http://<server-ip>:8080`
 
 ---
 
@@ -36,7 +36,7 @@ The Net Stabilization system provides a REST API for integrating mining fleet po
 
 - **Real-time power monitoring** - Track fleet and individual miner power consumption
 - **Dynamic power control** - Activate/deactivate miners to meet target power levels
-- **Frequency-based power scaling** - Fine-grained power control via frequency adjustment (300-650 MHz)
+- **Frequency-based power scaling** - Fine-grained power control via frequency adjustment (350-800 MHz)
 - **On/Off power control** - Coarse-grained control by turning miners on/off
 - **Manual override** - Dashboard-based manual control that bypasses EMS commands
 
@@ -63,7 +63,7 @@ The Net Stabilization system provides a REST API for integrating mining fleet po
 
 | Hardware | Firmware | Power Range | Frequency Range |
 |----------|----------|-------------|-----------------|
-| Antminer S9 | Vnish 3.9.x | 300-1460W | 300-650 MHz |
+| Antminer S9 | Vnish 3.9.x | 660-1900W | 350-800 MHz |
 
 ---
 
@@ -587,12 +587,14 @@ Get list of valid frequencies for Vnish firmware.
 
 ```json
 {
-  "valid_frequencies": [300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 650],
+  "valid_frequencies": [100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, "...", 650, 700, 750, 800, "...", 1175],
   "min_frequency": 300,
-  "max_frequency": 650,
+  "max_frequency": 800,
   "default_frequency": 650
 }
 ```
+
+> **Note:** Full list contains 114 frequencies. The `min_frequency` and `max_frequency` are safety limits, not the full range available.
 
 ---
 
@@ -605,14 +607,18 @@ Get the power-frequency mapping curve for S9 miners.
 ```json
 {
   "curve": [
-    {"frequency_mhz": 300, "power_watts": 600, "hashrate_ths": 6.5, "voltage": 8.1},
-    {"frequency_mhz": 350, "power_watts": 700, "hashrate_ths": 7.5, "voltage": 8.2},
-    {"frequency_mhz": 400, "power_watts": 800, "hashrate_ths": 8.6, "voltage": 8.3},
-    {"frequency_mhz": 450, "power_watts": 900, "hashrate_ths": 9.6, "voltage": 8.4},
-    {"frequency_mhz": 500, "power_watts": 1000, "hashrate_ths": 10.7, "voltage": 8.5},
-    {"frequency_mhz": 550, "power_watts": 1140, "hashrate_ths": 11.8, "voltage": 8.6},
-    {"frequency_mhz": 600, "power_watts": 1280, "hashrate_ths": 12.9, "voltage": 8.7},
-    {"frequency_mhz": 650, "power_watts": 1460, "hashrate_ths": 14.0, "voltage": 8.8}
+    {"frequency_mhz": 350, "power_watts": 660, "hashrate_ths": 7.5, "voltage": 8.2},
+    {"frequency_mhz": 387, "power_watts": 875, "hashrate_ths": 10.0, "voltage": 8.4},
+    {"frequency_mhz": 450, "power_watts": 950, "hashrate_ths": 11.0, "voltage": 8.5},
+    {"frequency_mhz": 481, "power_watts": 1020, "hashrate_ths": 11.0, "voltage": 8.6},
+    {"frequency_mhz": 525, "power_watts": 1145, "hashrate_ths": 12.0, "voltage": 8.7},
+    {"frequency_mhz": 550, "power_watts": 1250, "hashrate_ths": 12.5, "voltage": 8.8},
+    {"frequency_mhz": 575, "power_watts": 1285, "hashrate_ths": 13.0, "voltage": 8.8},
+    {"frequency_mhz": 600, "power_watts": 1350, "hashrate_ths": 13.3, "voltage": 8.9},
+    {"frequency_mhz": 650, "power_watts": 1460, "hashrate_ths": 13.7, "voltage": 8.9},
+    {"frequency_mhz": 700, "power_watts": 1650, "hashrate_ths": 15.0, "voltage": 9.0},
+    {"frequency_mhz": 750, "power_watts": 1850, "hashrate_ths": 16.0, "voltage": 9.1},
+    {"frequency_mhz": 800, "power_watts": 1900, "hashrate_ths": 17.0, "voltage": 9.2}
   ]
 }
 ```
@@ -1013,7 +1019,7 @@ Check health of all services.
 import requests
 import time
 
-BASE_URL = "http://192.168.1.100:8000"
+BASE_URL = "http://192.168.1.100:8080"
 
 def ems_control_loop():
     while True:
@@ -1048,13 +1054,13 @@ def ems_control_loop():
 
 **Get Status:**
 ```bash
-curl -X GET "http://192.168.1.100:8000/api/status" \
+curl -X GET "http://192.168.1.100:8080/api/status" \
   -H "Accept: application/json"
 ```
 
 **Activate at 2.5 kW:**
 ```bash
-curl -X POST "http://192.168.1.100:8000/api/activate" \
+curl -X POST "http://192.168.1.100:8080/api/activate" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -d '{"activationPowerInKw": 2.5}'
@@ -1062,7 +1068,7 @@ curl -X POST "http://192.168.1.100:8000/api/activate" \
 
 **Deactivate:**
 ```bash
-curl -X POST "http://192.168.1.100:8000/api/deactivate" \
+curl -X POST "http://192.168.1.100:8080/api/deactivate" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -d '{}'
@@ -1070,14 +1076,14 @@ curl -X POST "http://192.168.1.100:8000/api/deactivate" \
 
 **Set Power Mode:**
 ```bash
-curl -X POST "http://192.168.1.100:8000/dashboard/api/power-mode" \
+curl -X POST "http://192.168.1.100:8080/dashboard/api/power-mode" \
   -H "Content-Type: application/json" \
   -d '{"mode": "frequency"}'
 ```
 
 **Enable Manual Override:**
 ```bash
-curl -X POST "http://192.168.1.100:8000/dashboard/api/override" \
+curl -X POST "http://192.168.1.100:8080/dashboard/api/override" \
   -H "Content-Type: application/json" \
   -d '{"enabled": true, "target_power_kw": 1.5}'
 ```
@@ -1090,6 +1096,7 @@ curl -X POST "http://192.168.1.100:8000/dashboard/api/override" \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `HOST_PORT` | `8080` | Server port |
 | `MINER_DISCOVERY_ENABLED` | `true` | Enable auto-discovery |
 | `MINER_NETWORK_CIDR` | `192.168.1.0/24` | Network range to scan |
 | `POLL_INTERVAL_SECONDS` | `5` | Status polling interval |
