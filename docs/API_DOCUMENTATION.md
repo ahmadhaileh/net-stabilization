@@ -1119,4 +1119,4 @@ For technical support or questions about this API, contact your system administr
 
 ---
 
-*This documentation was generated on January 20, 2026.*
+*This documentation was created on January 20, 2026.*
