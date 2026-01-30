@@ -887,13 +887,16 @@ class FleetManager:
         # Clamp to available miners
         miners_needed = min(miners_needed, len(all_miners))
         
+        # Import FirmwareType for firmware check
+        from .miner_discovery import FirmwareType
+        
         # Separate miners into categories:
         # 1. Already mining - keep these
-        # 2. Not mining but have Vnish (controllable) - can wake
+        # 2. Not mining but have Vnish firmware (controllable) - can wake
         # 3. Not mining without Vnish (uncontrollable) - skip
         already_mining = [m for m in all_miners if m.is_mining]
-        can_wake = [m for m in all_miners if not m.is_mining and 'vnish' in m.name.lower()]
-        cannot_control = [m for m in all_miners if not m.is_mining and 'vnish' not in m.name.lower()]
+        can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
+        cannot_control = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
         
         logger.info(
             "On/Off power control - smart selection",
