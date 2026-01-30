@@ -100,7 +100,7 @@ class FleetManager:
         
         # Power regulation settings
         self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
-        self._regulation_tolerance_percent: float = 10.0  # Tolerate 10% deviation
+        self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
         self._regulation_warmup_seconds: int = 90  # Wait after activation before regulating
         self._regulation_cooldown_seconds: int = 60  # Wait after adjustment before next one
         self._last_activation_time: Optional[datetime] = None  # Track last activation
