@@ -687,11 +687,13 @@ class FleetManager:
         total_power_kw: float
     ) -> tuple[FleetState, RunningStatus]:
         """
-        Calculate fleet state based on miner states.
+        Calculate fleet state based on miner states and explicit state.
         
-        IMPORTANT: If there's an active power target, we should preserve
-        RUNNING state even if current power is low (miners might be waking up).
-        This prevents the idle enforcement loop from re-idling waking miners.
+        IMPORTANT: 
+        - If there's an active power target, preserve RUNNING state even if 
+          current power is low (miners might be waking up).
+        - If deactivation was requested (no target power), report STANDBY
+          even if miners are still spinning down.
         """
         if online_count == 0:
             return FleetState.FAULT, RunningStatus.STANDBY
@@ -701,6 +703,13 @@ class FleetManager:
         if self._target_power_kw is not None and self._target_power_kw > 0:
             return FleetState.RUNNING, RunningStatus.RUNNING
         
+        # If no target power is set, we're in STANDBY mode
+        # This takes precedence over current power readings because miners
+        # take time to spin down after deactivation command
+        if self._target_power_kw is None:
+            return FleetState.STANDBY, RunningStatus.STANDBY
+        
+        # Fallback based on actual power (shouldn't normally reach here)
         if total_power_kw > self.settings.min_power_threshold_kw:
             return FleetState.RUNNING, RunningStatus.RUNNING
         else:
