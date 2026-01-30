@@ -101,6 +101,10 @@ class FleetManager:
         # Power regulation settings
         self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
         self._regulation_tolerance_percent: float = 10.0  # Tolerate 10% deviation
+        self._regulation_warmup_seconds: int = 90  # Wait after activation before regulating
+        self._regulation_cooldown_seconds: int = 60  # Wait after adjustment before next one
+        self._last_activation_time: Optional[datetime] = None  # Track last activation
+        self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -320,6 +324,11 @@ class FleetManager:
         
         Runs periodically to compare actual power vs target power and
         adjusts miner allocations if deviation exceeds tolerance threshold.
+        
+        Includes buffers to prevent oscillation:
+        - Warmup: Wait 90s after activation before checking (miners need time to stabilize)
+        - Cooldown: Wait 60s after adjustment before next one
+        - Transition check: Skip if miners are still waking up
         """
         while True:
             await asyncio.sleep(self._regulation_interval_seconds)
@@ -336,6 +345,38 @@ class FleetManager:
                 # Skip if not in running state
                 if self._status.state != FleetState.RUNNING:
                     continue
+                
+                # Warmup buffer: Skip if recent activation (miners still warming up)
+                if self._last_activation_time:
+                    elapsed_since_activation = (datetime.utcnow() - self._last_activation_time).total_seconds()
+                    if elapsed_since_activation < self._regulation_warmup_seconds:
+                        logger.debug(
+                            "Regulation skipped - warmup period",
+                            elapsed_s=round(elapsed_since_activation),
+                            warmup_s=self._regulation_warmup_seconds
+                        )
+                        continue
+                
+                # Cooldown buffer: Skip if recent adjustment
+                if self._last_regulation_adjustment_time:
+                    elapsed_since_adjustment = (datetime.utcnow() - self._last_regulation_adjustment_time).total_seconds()
+                    if elapsed_since_adjustment < self._regulation_cooldown_seconds:
+                        logger.debug(
+                            "Regulation skipped - cooldown period",
+                            elapsed_s=round(elapsed_since_adjustment),
+                            cooldown_s=self._regulation_cooldown_seconds
+                        )
+                        continue
+                
+                # Check if any miners are still transitioning (waking/sleeping)
+                if self._use_direct_mode:
+                    transitioning_count = sum(1 for m in self.discovery.miners if m.is_transitioning)
+                    if transitioning_count > 0:
+                        logger.debug(
+                            "Regulation skipped - miners transitioning",
+                            transitioning_count=transitioning_count
+                        )
+                        continue
                 
                 # Get current actual power
                 actual_power_kw = self._status.active_power_kw
@@ -363,6 +404,9 @@ class FleetManager:
                         deviation_percent=round(deviation_percent, 1),
                         tolerance_percent=self._regulation_tolerance_percent
                     )
+                    
+                    # Mark adjustment time for cooldown
+                    self._last_regulation_adjustment_time = datetime.utcnow()
                     
                     # Re-activate with same target to adjust miner allocations
                     # Use internal method to avoid locking issues
@@ -614,6 +658,9 @@ class FleetManager:
             # Store target
             self._target_power_kw = target_power_kw
             self._status.last_ems_command = datetime.utcnow()
+            
+            # Mark activation time for regulation warmup buffer
+            self._last_activation_time = datetime.utcnow()
             
             # Log command
             self._log_command("ems", "activate", {"power_kw": target_power_kw})
