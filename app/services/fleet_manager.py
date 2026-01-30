@@ -99,6 +99,9 @@ class FleetManager:
         # Target power for activation (set by EMS)
         self._target_power_kw: Optional[float] = None
         
+        # Deactivation in progress flag - stops all background loops from activating
+        self._deactivation_in_progress: bool = False
+        
         # Power regulation settings
         self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
         self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
@@ -340,6 +343,11 @@ class FleetManager:
             await asyncio.sleep(self._regulation_interval_seconds)
             
             try:
+                # CRITICAL: Skip if deactivation is in progress
+                if self._deactivation_in_progress:
+                    logger.debug("Regulation skipped - deactivation in progress")
+                    continue
+                
                 # Skip if no active target power
                 if self._target_power_kw is None or self._target_power_kw <= 0:
                     continue
@@ -403,6 +411,15 @@ class FleetManager:
                 
                 # Check if adjustment is needed
                 if deviation_percent > self._regulation_tolerance_percent:
+                    # CRITICAL: Re-check target before making changes
+                    # This prevents race condition with deactivate
+                    if self._target_power_kw is None or self._target_power_kw <= 0:
+                        logger.info("Regulation cancelled - target was cleared (deactivation in progress)")
+                        continue
+                    
+                    # Use fresh target value (not cached)
+                    target_power_kw = self._target_power_kw
+                    
                     logger.info(
                         "Power deviation detected, re-adjusting",
                         target_kw=target_power_kw,
@@ -663,9 +680,20 @@ class FleetManager:
         online_count: int,
         total_power_kw: float
     ) -> tuple[FleetState, RunningStatus]:
-        """Calculate fleet state based on miner states."""
+        """
+        Calculate fleet state based on miner states.
+        
+        IMPORTANT: If there's an active power target, we should preserve
+        RUNNING state even if current power is low (miners might be waking up).
+        This prevents the idle enforcement loop from re-idling waking miners.
+        """
         if online_count == 0:
             return FleetState.FAULT, RunningStatus.STANDBY
+        
+        # If there's an active power target, consider fleet as RUNNING
+        # This is crucial during warmup period when miners are waking up
+        if self._target_power_kw is not None and self._target_power_kw > 0:
+            return FleetState.RUNNING, RunningStatus.RUNNING
         
         if total_power_kw > self.settings.min_power_threshold_kw:
             return FleetState.RUNNING, RunningStatus.RUNNING
@@ -702,6 +730,9 @@ class FleetManager:
         """
         async with self._lock:
             logger.info("Activation requested", target_power_kw=target_power_kw)
+            
+            # Clear deactivation flag
+            self._deactivation_in_progress = False
             
             # Validate request
             if target_power_kw < 0:
@@ -742,14 +773,22 @@ class FleetManager:
         async with self._lock:
             logger.info("Deactivation requested")
             
-            # Clear target
+            # IMMEDIATELY set flags to stop all background activation
+            # This prevents race conditions with regulation loop
+            self._deactivation_in_progress = True
             self._target_power_kw = None
+            self._last_activation_time = None  # Clear activation time
             self._status.last_ems_command = datetime.utcnow()
             
             # Log command
             self._log_command("ems", "deactivate", {})
             
-            return await self._deactivate_fleet()
+            result = await self._deactivate_fleet()
+            
+            # Clear flag after deactivation completes
+            self._deactivation_in_progress = False
+            
+            return result
     
     async def _activate_fleet(self, target_power_kw: float) -> tuple[bool, str]:
         """Internal method to activate miners to reach target power."""
@@ -876,10 +915,28 @@ class FleetManager:
                 else:
                     results.append(f"{miner.ip}: OFF (already)")
         
+        # Log detailed results
+        logger.info(
+            "Activation complete",
+            target_kw=target_power_kw,
+            miners_needed=miners_needed,
+            commands_sent=success_count,
+            results=results[:10]  # Log first 10 results
+        )
+        
+        # Check if we actually sent any commands
+        commands_needed = sum(1 for m in sorted_miners[:miners_needed] if not m.is_mining)
+        if commands_needed > 0 and success_count == 0:
+            logger.error(
+                "Activation FAILED - no miners responded to wake commands",
+                commands_attempted=commands_needed
+            )
+            return False, f"Failed to wake any miners (tried {commands_needed})"
+        
         self._status.state = FleetState.RUNNING
         
         actual_power_kw = miners_needed * full_power_kw
-        return True, f"Target: {target_power_kw:.2f}kW, Actual: {actual_power_kw:.2f}kW ({miners_needed} miners ON)"
+        return True, f"Target: {target_power_kw:.2f}kW, Est: {actual_power_kw:.2f}kW ({miners_needed} miners, {success_count} commands sent)"
     
     async def _activate_fleet_frequency_mode(
         self,

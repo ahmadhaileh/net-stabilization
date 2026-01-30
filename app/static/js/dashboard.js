@@ -2021,8 +2021,9 @@ function recordHistoryPoint() {
             if (!historyData.miners[m.ip]) {
                 historyData.miners[m.ip] = { hashrate: [], power: [], temp: [] };
             }
+            const minerPowerKw = m.power_kw || 0;
             historyData.miners[m.ip].hashrate.push({ x: now, y: hashrateGhs / 1000 }); // TH/s
-            historyData.miners[m.ip].power.push({ x: now, y: powerKw });
+            historyData.miners[m.ip].power.push({ x: now, y: minerPowerKw });
             historyData.miners[m.ip].temp.push({ x: now, y: tempC });
         }
     });
