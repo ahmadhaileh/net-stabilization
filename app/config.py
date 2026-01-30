@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     rated_power_kw: Optional[float] = None  # Auto-calculated if not set
     min_power_threshold_kw: float = 0.1  # Lower threshold for activation
     power_ramp_rate_kw_per_sec: float = 50.0
-    idle_all_on_startup: bool = False  # Don't idle miners on startup - let them keep their current state
+    idle_all_on_startup: bool = True  # Idle all miners on startup - start in standby mode
     
     # Power Control Mode:
     # - "frequency": Use frequency scaling for fine-grained power control (requires working API)

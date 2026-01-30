@@ -18,7 +18,7 @@ let state = {
     discoveredMiners: [],
     history: [],
     overrideEnabled: false,
-    viewMode: 'grid',
+    viewMode: 'rack',  // Default to rack view
     ratedPower: 0,
     lastScan: null,
     minerDetailsCache: {}, // Cache detailed miner data for instant modal population
@@ -1999,28 +1999,18 @@ function recordHistoryPoint() {
     const now = new Date();
 
     let totalHashrate = 0;
-    let totalPower = 0;
     let totalTemp = 0;
     let tempCount = 0;
 
-    // Use backend's calculated active power for accuracy (only sums actual power from mining miners)
-    const backendPower = state.status?.active_power_kw || 0;
+    // Use backend's calculated active power DIRECTLY for graph consistency
+    // This ensures graph matches the status API display
+    const totalPower = state.status?.active_power_kw || 0;
 
     state.discoveredMiners.forEach((m) => {
         const hashrateGhs = parseFloat(m.hashrate_ghs) || parseFloat(m.hashrate) || 0;
-        // Only count actual reported power, not rated power fallback
-        // Idle miners (is_mining=false, is_online=true) report ~18W idle consumption
-        const IDLE_POWER_KW = 0.018; // 18W idle power consumption for control board
-        let powerKw = 0;
-        if (m.is_mining) {
-            powerKw = m.power_kw > 0 ? m.power_kw : (m.power_w ? m.power_w / 1000 : 0);
-        } else if (m.is_online) {
-            powerKw = IDLE_POWER_KW; // Idle but online - control board still consumes power
-        }
         const tempC = m.temperature_c || m.temp_chip || m.temp || 0;
 
         totalHashrate += hashrateGhs;
-        totalPower += powerKw;
         if (tempC > 0) {
             totalTemp += tempC;
             tempCount++;

@@ -94,6 +94,7 @@ class FleetManager:
         self._poll_task: Optional[asyncio.Task] = None
         self._discovery_task: Optional[asyncio.Task] = None
         self._regulation_task: Optional[asyncio.Task] = None
+        self._idle_enforcement_task: Optional[asyncio.Task] = None
         
         # Target power for activation (set by EMS)
         self._target_power_kw: Optional[float] = None
@@ -163,6 +164,11 @@ class FleetManager:
         if self._regulation_task is None or self._regulation_task.done():
             self._regulation_task = asyncio.create_task(self._regulation_loop())
             logger.info("Started power regulation loop")
+        
+        # Start idle enforcement loop
+        if self._idle_enforcement_task is None or self._idle_enforcement_task.done():
+            self._idle_enforcement_task = asyncio.create_task(self._idle_enforcement_loop())
+            logger.info("Started idle enforcement loop")
         
         # Start periodic discovery if in direct mode
         if self._use_direct_mode and self.settings.auto_discovery_on_startup:
@@ -417,6 +423,58 @@ class FleetManager:
                         
             except Exception as e:
                 logger.error("Error in regulation loop", error=str(e))
+    
+    async def _idle_enforcement_loop(self):
+        """
+        Background loop to enforce idle state when fleet is in STANDBY.
+        
+        When the fleet is in STANDBY mode (after deactivation or on startup),
+        this loop continuously monitors for miners that might have started
+        mining (e.g., after restart, network glitch, or firmware behavior)
+        and re-idles them.
+        
+        Runs every 30 seconds to catch rogue miners.
+        """
+        while True:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            
+            try:
+                # Only enforce idle if we're in STANDBY state and no active power target
+                if self._status.state != FleetState.STANDBY:
+                    continue
+                
+                # If there's an active power target, skip (regulation loop handles it)
+                if self._target_power_kw is not None and self._target_power_kw > 0:
+                    continue
+                
+                # Skip if in manual override mode
+                if self._manual_override:
+                    continue
+                
+                # In direct mode, find any miners that are mining when they shouldn't be
+                if self._use_direct_mode:
+                    rogue_miners = [
+                        m for m in self.discovery.miners
+                        if m.is_online and m.is_mining
+                    ]
+                    
+                    if rogue_miners:
+                        logger.warning(
+                            "Found rogue miners mining in STANDBY mode, re-idling",
+                            count=len(rogue_miners),
+                            ips=[m.ip for m in rogue_miners]
+                        )
+                        
+                        # Re-idle all rogue miners
+                        for miner in rogue_miners:
+                            ok, msg = await self.discovery.set_miner_idle(miner.id)
+                            if ok:
+                                logger.info("Re-idled rogue miner", miner_id=miner.id, ip=miner.ip)
+                            else:
+                                logger.warning("Failed to re-idle rogue miner", miner_id=miner.id, error=msg)
+                                
+            except Exception as e:
+                logger.error("Error in idle enforcement loop", error=str(e))
     
     async def run_discovery(self) -> int:
         """
@@ -1165,6 +1223,7 @@ class FleetManager:
                 logger.warning("Failed to idle miner", miner_id=miner.id, error=msg)
         
         self._status.state = FleetState.STANDBY
+        self._target_power_kw = None  # Clear target so idle enforcement loop kicks in
         return True, f"Sent idle command to {success_count}/{len(online_miners)} miners (failed: {fail_count})"
     
     async def _deactivate_fleet_awesomeminer(self) -> tuple[bool, str]:
@@ -1192,6 +1251,7 @@ class FleetManager:
         )
         
         self._status.state = FleetState.STANDBY
+        self._target_power_kw = None  # Clear target so idle enforcement loop kicks in
         return True, "Fleet deactivation command accepted."
     
     def _select_miners_for_power(
