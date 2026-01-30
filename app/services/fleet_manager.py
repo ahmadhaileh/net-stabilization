@@ -864,6 +864,12 @@ class FleetManager:
         
         Turns on just enough miners to reach the target power.
         Accepts that actual power will be in discrete steps.
+        
+        Smart miner selection:
+        1. Prioritize miners that are already mining (keep them on)
+        2. Wake additional miners that have Vnish firmware
+        3. Skip miners that don't have Vnish (can't be controlled reliably)
+        4. Keep trying to wake more miners if some fail
         """
         # Define full power per miner (watts)
         full_power_watts = int(all_miners[0].rated_power_watts) if all_miners else 1460
@@ -881,68 +887,85 @@ class FleetManager:
         # Clamp to available miners
         miners_needed = min(miners_needed, len(all_miners))
         
+        # Separate miners into categories:
+        # 1. Already mining - keep these
+        # 2. Not mining but have Vnish (controllable) - can wake
+        # 3. Not mining without Vnish (uncontrollable) - skip
+        already_mining = [m for m in all_miners if m.is_mining]
+        can_wake = [m for m in all_miners if not m.is_mining and 'vnish' in m.name.lower()]
+        cannot_control = [m for m in all_miners if not m.is_mining and 'vnish' not in m.name.lower()]
+        
         logger.info(
-            "On/Off power control",
+            "On/Off power control - smart selection",
             target_kw=target_power_kw,
             miners_needed=miners_needed,
-            full_power_kw=full_power_kw,
-            total_available=len(all_miners)
+            already_mining=len(already_mining),
+            can_wake=len(can_wake),
+            cannot_control=len(cannot_control),
+            full_power_kw=full_power_kw
         )
-        
-        # Sort miners by IP for consistent ordering
-        sorted_miners = sorted(all_miners, key=lambda m: m.ip)
         
         success_count = 0
         results = []
+        active_count = 0
         
-        for i, miner in enumerate(sorted_miners):
-            if i < miners_needed:
-                # Turn this miner ON
-                if not miner.is_mining:
-                    ok, msg = await self.discovery.set_miner_active(miner.id)
-                    if ok:
-                        success_count += 1
-                        results.append(f"{miner.ip}: ON")
-                        logger.info("Miner activated", ip=miner.ip)
-                    else:
-                        logger.warning("Failed to activate miner", ip=miner.ip, error=msg)
-                else:
-                    results.append(f"{miner.ip}: ON (already)")
+        # Step 1: Keep miners that are already mining (up to needed)
+        sorted_mining = sorted(already_mining, key=lambda m: m.ip)
+        for miner in sorted_mining:
+            if active_count < miners_needed:
+                results.append(f"{miner.ip}: ON (already)")
+                active_count += 1
             else:
-                # Turn this miner OFF
-                if miner.is_mining:
-                    ok, msg = await self.discovery.set_miner_idle(miner.id)
-                    if ok:
-                        success_count += 1
-                        results.append(f"{miner.ip}: OFF")
-                        logger.info("Miner idled", ip=miner.ip)
-                    else:
-                        logger.warning("Failed to idle miner", ip=miner.ip, error=msg)
+                # Turn off excess miners
+                ok, msg = await self.discovery.set_miner_idle(miner.id)
+                if ok:
+                    success_count += 1
+                    results.append(f"{miner.ip}: OFF")
+                    logger.info("Miner idled (excess)", ip=miner.ip)
                 else:
-                    results.append(f"{miner.ip}: OFF (already)")
+                    logger.warning("Failed to idle miner", ip=miner.ip, error=msg)
+        
+        # Step 2: Wake additional miners as needed (only Vnish-capable)
+        sorted_wakeable = sorted(can_wake, key=lambda m: m.ip)
+        for miner in sorted_wakeable:
+            if active_count >= miners_needed:
+                break
+            
+            ok, msg = await self.discovery.set_miner_active(miner.id)
+            if ok:
+                success_count += 1
+                active_count += 1
+                results.append(f"{miner.ip}: ON (waking)")
+                logger.info("Miner wake command sent", ip=miner.ip)
+            else:
+                # Failed to wake - don't count toward active, try next miner
+                logger.warning("Failed to wake miner, trying next", ip=miner.ip, error=msg)
+                results.append(f"{miner.ip}: FAILED")
+        
+        # Step 3: If still short, log but can't do much about non-Vnish miners
+        if active_count < miners_needed and cannot_control:
+            logger.warning(
+                "Cannot reach target - some miners lack Vnish firmware",
+                target_miners=miners_needed,
+                active_miners=active_count,
+                uncontrollable_count=len(cannot_control),
+                uncontrollable_ips=[m.ip for m in cannot_control[:5]]  # First 5
+            )
         
         # Log detailed results
         logger.info(
             "Activation complete",
             target_kw=target_power_kw,
             miners_needed=miners_needed,
+            active_count=active_count,
             commands_sent=success_count,
             results=results[:10]  # Log first 10 results
         )
         
-        # Check if we actually sent any commands
-        commands_needed = sum(1 for m in sorted_miners[:miners_needed] if not m.is_mining)
-        if commands_needed > 0 and success_count == 0:
-            logger.error(
-                "Activation FAILED - no miners responded to wake commands",
-                commands_attempted=commands_needed
-            )
-            return False, f"Failed to wake any miners (tried {commands_needed})"
-        
         self._status.state = FleetState.RUNNING
         
-        actual_power_kw = miners_needed * full_power_kw
-        return True, f"Target: {target_power_kw:.2f}kW, Est: {actual_power_kw:.2f}kW ({miners_needed} miners, {success_count} commands sent)"
+        actual_power_kw = active_count * full_power_kw
+        return True, f"Target: {target_power_kw:.2f}kW, Est: {actual_power_kw:.2f}kW ({active_count} miners, {success_count} commands sent)"
     
     async def _activate_fleet_frequency_mode(
         self,
