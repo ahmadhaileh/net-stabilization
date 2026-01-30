@@ -93,9 +93,14 @@ class FleetManager:
         # Background task handles
         self._poll_task: Optional[asyncio.Task] = None
         self._discovery_task: Optional[asyncio.Task] = None
+        self._regulation_task: Optional[asyncio.Task] = None
         
         # Target power for activation (set by EMS)
         self._target_power_kw: Optional[float] = None
+        
+        # Power regulation settings
+        self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
+        self._regulation_tolerance_percent: float = 10.0  # Tolerate 10% deviation
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -150,6 +155,11 @@ class FleetManager:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
             logger.info("Started database cleanup task")
         
+        # Start power regulation loop
+        if self._regulation_task is None or self._regulation_task.done():
+            self._regulation_task = asyncio.create_task(self._regulation_loop())
+            logger.info("Started power regulation loop")
+        
         # Start periodic discovery if in direct mode
         if self._use_direct_mode and self.settings.auto_discovery_on_startup:
             # Run initial discovery
@@ -183,25 +193,23 @@ class FleetManager:
             return True, "No miners to idle"
         
         success_count = 0
-        total_count = 0
+        fail_count = 0
         
+        # Send idle command to ALL miners regardless of is_mining status
+        # because the status might be stale or inaccurate
         for miner in all_miners:
-            if miner.is_mining:
-                total_count += 1
-                ok, msg = await self.discovery.set_miner_idle(miner.id)
-                if ok:
-                    success_count += 1
-                    logger.info("Miner idled on startup", miner_id=miner.id, ip=miner.ip)
-                else:
-                    logger.warning("Failed to idle miner on startup", miner_id=miner.id, error=msg)
+            ok, msg = await self.discovery.set_miner_idle(miner.id)
+            if ok:
+                success_count += 1
+                logger.info("Miner idled on startup", miner_id=miner.id, ip=miner.ip)
+            else:
+                fail_count += 1
+                logger.warning("Failed to idle miner on startup", miner_id=miner.id, error=msg)
         
         self._status.state = FleetState.STANDBY
         self._target_power_kw = None
         
-        if total_count == 0:
-            return True, "All miners already idle"
-        
-        return True, f"Idled {success_count}/{total_count} miners on startup"
+        return True, f"Sent idle command to {success_count}/{len(all_miners)} miners (failed: {fail_count})"
     
     def _save_fleet_snapshot_throttled(
         self,
@@ -258,6 +266,14 @@ class FleetManager:
             except asyncio.CancelledError:
                 pass
             logger.info("Stopped cleanup task")
+        
+        if self._regulation_task and not self._regulation_task.done():
+            self._regulation_task.cancel()
+            try:
+                await self._regulation_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Stopped power regulation loop")
     
     async def _polling_loop(self):
         """Background loop that polls miner status."""
@@ -297,6 +313,66 @@ class FleetManager:
                     )
             except Exception as e:
                 logger.error("Error in cleanup loop", error=str(e))
+    
+    async def _regulation_loop(self):
+        """
+        Background loop for continuous power regulation.
+        
+        Runs periodically to compare actual power vs target power and
+        adjusts miner allocations if deviation exceeds tolerance threshold.
+        """
+        while True:
+            await asyncio.sleep(self._regulation_interval_seconds)
+            
+            try:
+                # Skip if no active target power
+                if self._target_power_kw is None or self._target_power_kw <= 0:
+                    continue
+                
+                # Skip if in manual override mode
+                if self._manual_override:
+                    continue
+                
+                # Skip if not in running state
+                if self._status.state != FleetState.RUNNING:
+                    continue
+                
+                # Get current actual power
+                actual_power_kw = self._status.active_power_kw
+                target_power_kw = self._target_power_kw
+                
+                # Calculate deviation percentage
+                if target_power_kw > 0:
+                    deviation_percent = abs(actual_power_kw - target_power_kw) / target_power_kw * 100
+                else:
+                    deviation_percent = 0
+                
+                logger.debug(
+                    "Power regulation check",
+                    target_kw=target_power_kw,
+                    actual_kw=actual_power_kw,
+                    deviation_percent=round(deviation_percent, 1)
+                )
+                
+                # Check if adjustment is needed
+                if deviation_percent > self._regulation_tolerance_percent:
+                    logger.info(
+                        "Power deviation detected, re-adjusting",
+                        target_kw=target_power_kw,
+                        actual_kw=actual_power_kw,
+                        deviation_percent=round(deviation_percent, 1),
+                        tolerance_percent=self._regulation_tolerance_percent
+                    )
+                    
+                    # Re-activate with same target to adjust miner allocations
+                    # Use internal method to avoid locking issues
+                    if self._use_direct_mode:
+                        await self._activate_fleet_direct(target_power_kw)
+                    else:
+                        await self._activate_fleet_awesomeminer(target_power_kw)
+                        
+            except Exception as e:
+                logger.error("Error in regulation loop", error=str(e))
     
     async def run_discovery(self) -> int:
         """
@@ -344,6 +420,9 @@ class FleetManager:
         online_count = 0
         mining_count = 0
         
+        # Idle power consumption for control board (18W per miner when online but not mining)
+        IDLE_POWER_KW = 0.018
+        
         for miner in miners:
             state = MinerState(
                 miner_id=miner.id,
@@ -362,10 +441,12 @@ class FleetManager:
             
             if state.is_online:
                 online_count += 1
-            
-            if state.is_mining:
-                mining_count += 1
-                total_power_kw += state.power_kw
+                if state.is_mining:
+                    mining_count += 1
+                    total_power_kw += state.power_kw
+                else:
+                    # Idle but online miners still consume ~18W for control board
+                    total_power_kw += IDLE_POWER_KW
         
         return self._finalize_status(
             miner_states, total_power_kw, total_rated_kw,
@@ -1012,28 +1093,32 @@ class FleetManager:
     
     async def _deactivate_fleet_direct(self) -> tuple[bool, str]:
         """Put miners into idle mode using direct communication."""
-        # Get all mining miners
-        mining_miners = [
+        # Get ALL online miners, not just those marked as mining
+        # because the is_mining status might be stale
+        online_miners = [
             m for m in self.discovery.miners
-            if m.is_mining
+            if m.is_online
         ]
         
-        if not mining_miners:
+        if not online_miners:
             self._status.state = FleetState.STANDBY
-            return True, "Fleet is already in standby/idle mode"
+            return True, "No online miners found"
         
-        # Put each miner into idle mode
+        # Put each miner into idle mode (even if they report not mining)
+        # This ensures we definitely stop all mining activity
         success_count = 0
-        for miner in mining_miners:
+        fail_count = 0
+        for miner in online_miners:
             ok, msg = await self.discovery.set_miner_idle(miner.id)
             if ok:
                 success_count += 1
                 logger.info("Miner set to idle", miner_id=miner.id, ip=miner.ip)
             else:
+                fail_count += 1
                 logger.warning("Failed to idle miner", miner_id=miner.id, error=msg)
         
         self._status.state = FleetState.STANDBY
-        return True, f"Put {success_count}/{len(mining_miners)} miners into idle mode"
+        return True, f"Sent idle command to {success_count}/{len(online_miners)} miners (failed: {fail_count})"
     
     async def _deactivate_fleet_awesomeminer(self) -> tuple[bool, str]:
         """Stop mining using AwesomeMiner API (legacy)."""

@@ -266,6 +266,8 @@ function updateFleetMetrics() {
     let totalPower = 0;
     let miningCount = 0;
 
+    const IDLE_POWER_KW = 0.018; // 18W idle power consumption for control board
+
     state.discoveredMiners.forEach((m) => {
         const hashrate = parseFloat(m.hashrate_ghs) || 0;
         totalGhs += hashrate;
@@ -276,8 +278,12 @@ function updateFleetMetrics() {
         }
 
         if (m.is_mining) {
-            totalPower += m.power_kw > 0 ? m.power_kw : m.rated_power_kw;
+            // Only count actual power, not rated power fallback
+            totalPower += m.power_kw > 0 ? m.power_kw : 0;
             miningCount++;
+        } else if (m.is_online) {
+            // Idle but online - control board still consumes power
+            totalPower += IDLE_POWER_KW;
         }
     });
 
@@ -312,8 +318,8 @@ function updateFleetMetrics() {
         const tempPercent = Math.min((avgTemp / 100) * 100, 100);
         tempBarEl.style.width = tempPercent + '%';
         tempBarEl.classList.remove('warning', 'critical');
-        if (avgTemp >= 80) tempBarEl.classList.add('critical');
-        else if (avgTemp >= 65) tempBarEl.classList.add('warning');
+        if (avgTemp >= 90) tempBarEl.classList.add('critical');
+        else if (avgTemp >= 75) tempBarEl.classList.add('warning');
     }
 
     // Update efficiency (GH/W)
@@ -1195,8 +1201,8 @@ function extractPoolName(url) {
 
 function getTempClass(temp) {
     if (!temp || temp <= 0) return '';
-    if (temp >= 80) return 'temp-hot';
-    if (temp >= 70) return 'temp-warm';
+    if (temp >= 90) return 'temp-hot';
+    if (temp >= 80) return 'temp-warm';
     return 'temp-ok';
 }
 
@@ -1603,10 +1609,10 @@ function runFleetAnomalyDetection() {
             }
 
             // Individual miner checks
-            if (temp >= 85) {
+            if (temp >= 95) {
                 const recent = anomalies.find((a) => a.minerIp === miner.ip && a.message.includes('temperature') && now - new Date(a.timestamp).getTime() < 300000);
                 if (!recent) addAnomaly('critical', `Critical temperature: ${temp.toFixed(0)}°C`, miner.ip);
-            } else if (temp >= 75) {
+            } else if (temp >= 85) {
                 const recent = anomalies.find((a) => a.minerIp === miner.ip && a.message.includes('temperature') && now - new Date(a.timestamp).getTime() < 600000);
                 if (!recent) addAnomaly('warning', `High temperature: ${temp.toFixed(0)}°C`, miner.ip);
             }
@@ -1997,9 +2003,20 @@ function recordHistoryPoint() {
     let totalTemp = 0;
     let tempCount = 0;
 
+    // Use backend's calculated active power for accuracy (only sums actual power from mining miners)
+    const backendPower = state.status?.active_power_kw || 0;
+
     state.discoveredMiners.forEach((m) => {
         const hashrateGhs = parseFloat(m.hashrate_ghs) || parseFloat(m.hashrate) || 0;
-        const powerKw = m.is_mining ? (m.power_kw > 0 ? m.power_kw : m.power_w ? m.power_w / 1000 : m.rated_power_kw || 0) : 0;
+        // Only count actual reported power, not rated power fallback
+        // Idle miners (is_mining=false, is_online=true) report ~18W idle consumption
+        const IDLE_POWER_KW = 0.018; // 18W idle power consumption for control board
+        let powerKw = 0;
+        if (m.is_mining) {
+            powerKw = m.power_kw > 0 ? m.power_kw : (m.power_w ? m.power_w / 1000 : 0);
+        } else if (m.is_online) {
+            powerKw = IDLE_POWER_KW; // Idle but online - control board still consumes power
+        }
         const tempC = m.temperature_c || m.temp_chip || m.temp || 0;
 
         totalHashrate += hashrateGhs;
@@ -2680,11 +2697,11 @@ function updateModalBoardsWithDetails(boards) {
                 status = 'warning';
                 statusText = `${board.chips_total - board.chips_ok} chips missing`;
             }
-            if (board.chip_temp > 85) {
+            if (board.chip_temp > 90) {
                 status = 'warning';
                 statusText = 'High temp';
             }
-            if (board.chip_temp > 95 || board.chips_ok === 0) {
+            if (board.chip_temp > 100 || board.chips_ok === 0) {
                 status = 'error';
                 statusText = board.chips_ok === 0 ? 'Offline' : 'Critical temp';
             }
@@ -2719,7 +2736,7 @@ function updateModalBoardsWithDetails(boards) {
                 <div class="board-stat-row">
                     <div class="board-stat">
                         <span class="board-stat-label">Chip Temp</span>
-                        <span class="board-stat-value ${board.chip_temp > 85 ? 'temp-warning' : ''} ${board.chip_temp > 95 ? 'temp-critical' : ''}">${
+                        <span class="board-stat-value ${board.chip_temp > 90 ? 'temp-warning' : ''} ${board.chip_temp > 100 ? 'temp-critical' : ''}">${
                 board.chip_temp || '--'
             }°C</span>
                     </div>
