@@ -382,13 +382,19 @@ class FleetManager:
                         )
                         continue
                 
-                # Check if any miners are still transitioning (waking/sleeping)
+                # Check if many miners are still transitioning (waking/sleeping)
+                # Only skip if more than 20% of miners are transitioning to avoid blocking
+                # regulation when just a few miners are slow to wake
                 if self._use_direct_mode:
+                    total_miners = len(list(self.discovery.miners))
                     transitioning_count = sum(1 for m in self.discovery.miners if m.is_transitioning)
-                    if transitioning_count > 0:
+                    transitioning_pct = (transitioning_count / total_miners * 100) if total_miners > 0 else 0
+                    if transitioning_pct > 20:
                         logger.debug(
-                            "Regulation skipped - miners transitioning",
-                            transitioning_count=transitioning_count
+                            "Regulation skipped - too many miners transitioning",
+                            transitioning_count=transitioning_count,
+                            total_miners=total_miners,
+                            transitioning_pct=round(transitioning_pct, 1)
                         )
                         continue
                 
