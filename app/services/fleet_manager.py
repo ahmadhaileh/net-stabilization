@@ -10,6 +10,7 @@ This module handles:
 """
 import asyncio
 from datetime import datetime
+from statistics import median
 from typing import Optional, List, Dict, Any
 
 import structlog
@@ -880,25 +881,9 @@ class FleetManager:
         3. Skip miners that don't have Vnish (can't be controlled reliably)
         4. Keep trying to wake more miners if some fail
         """
-        # Define full power per miner (watts)
-        full_power_watts = int(all_miners[0].rated_power_watts) if all_miners else 1460
-        full_power_kw = full_power_watts / 1000.0
-        
-        # Calculate how many miners to turn on
-        target_power_watts = target_power_kw * 1000
-        miners_needed = int(target_power_watts / full_power_watts)
-        
-        # Add one more if there's significant remainder (> 30% of a miner)
-        remainder = target_power_watts - (miners_needed * full_power_watts)
-        if remainder > (full_power_watts * 0.3):
-            miners_needed += 1
-        
-        # Clamp to available miners
-        miners_needed = min(miners_needed, len(all_miners))
-        
         # Import FirmwareType for firmware check
         from .miner_discovery import FirmwareType
-        
+
         # Separate miners into categories:
         # 1. Already mining - keep these
         # 2. Not mining but have Vnish firmware (controllable) - can wake
@@ -906,6 +891,54 @@ class FleetManager:
         already_mining = [m for m in all_miners if m.is_mining]
         can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
         cannot_control = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
+
+        # Estimate per-miner power from real readings when possible
+        power_sample_miners = can_wake + already_mining
+        power_samples = [
+            m.power_watts for m in power_sample_miners
+            if m.is_mining and m.power_watts > 0
+        ]
+        if len(power_samples) < 3:
+            power_samples = [
+                m.rated_power_watts for m in power_sample_miners
+                if m.rated_power_watts > 0
+            ]
+        if not power_samples:
+            power_samples = [
+                m.rated_power_watts for m in all_miners
+                if m.rated_power_watts > 0
+            ]
+
+        per_miner_watts = median(power_samples) if power_samples else 1400.0
+        per_miner_watts = max(800.0, min(per_miner_watts, 3500.0))
+        per_miner_kw = per_miner_watts / 1000.0
+
+        max_possible_miners = len(already_mining) + len(can_wake)
+        if max_possible_miners == 0:
+            return False, "No controllable miners available for activation"
+
+        max_possible_kw = (max_possible_miners * per_miner_watts) / 1000.0
+        if target_power_kw > max_possible_kw:
+            logger.warning(
+                "Target exceeds controllable capacity, clamping",
+                requested_kw=target_power_kw,
+                max_possible_kw=round(max_possible_kw, 2),
+                controllable_miners=max_possible_miners
+            )
+            target_power_kw = max_possible_kw
+            self._target_power_kw = target_power_kw
+
+        # Calculate how many miners to turn on
+        target_power_watts = target_power_kw * 1000
+        miners_needed = int(target_power_watts / per_miner_watts)
+
+        # Add one more if there's significant remainder (> 30% of a miner)
+        remainder = target_power_watts - (miners_needed * per_miner_watts)
+        if remainder > (per_miner_watts * 0.3):
+            miners_needed += 1
+
+        # Clamp to controllable miners
+        miners_needed = min(miners_needed, max_possible_miners)
         
         logger.info(
             "On/Off power control - smart selection",
@@ -914,7 +947,7 @@ class FleetManager:
             already_mining=len(already_mining),
             can_wake=len(can_wake),
             cannot_control=len(cannot_control),
-            full_power_kw=full_power_kw
+            full_power_kw=per_miner_kw
         )
         
         success_count = 0
@@ -976,7 +1009,7 @@ class FleetManager:
         
         self._status.state = FleetState.RUNNING
         
-        actual_power_kw = active_count * full_power_kw
+        actual_power_kw = active_count * per_miner_kw
         return True, f"Target: {target_power_kw:.2f}kW, Est: {actual_power_kw:.2f}kW ({active_count} miners, {success_count} commands sent)"
     
     async def _activate_fleet_frequency_mode(
