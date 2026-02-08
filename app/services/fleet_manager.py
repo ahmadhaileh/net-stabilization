@@ -886,11 +886,11 @@ class FleetManager:
 
         # Separate miners into categories:
         # 1. Already mining - keep these
-        # 2. Not mining but have Vnish firmware (controllable) - can wake
-        # 3. Not mining without Vnish (uncontrollable) - skip
+        # 2. Not mining but have Vnish firmware (controllable) - can wake first
+        # 3. Not mining without Vnish (fallback) - try only if still short
         already_mining = [m for m in all_miners if m.is_mining]
         can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
-        cannot_control = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
+        fallback_wake = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
 
         # Estimate per-miner power from real readings when possible
         power_sample_miners = can_wake + already_mining
@@ -913,7 +913,7 @@ class FleetManager:
         per_miner_watts = max(800.0, min(per_miner_watts, 3500.0))
         per_miner_kw = per_miner_watts / 1000.0
 
-        max_possible_miners = len(already_mining) + len(can_wake)
+        max_possible_miners = len(already_mining) + len(can_wake) + len(fallback_wake)
         if max_possible_miners == 0:
             return False, "No controllable miners available for activation"
 
@@ -946,7 +946,7 @@ class FleetManager:
             miners_needed=miners_needed,
             already_mining=len(already_mining),
             can_wake=len(can_wake),
-            cannot_control=len(cannot_control),
+            cannot_control=len(fallback_wake),
             full_power_kw=per_miner_kw
         )
         
@@ -986,15 +986,32 @@ class FleetManager:
                 # Failed to wake - don't count toward active, try next miner
                 logger.warning("Failed to wake miner, trying next", ip=miner.ip, error=msg)
                 results.append(f"{miner.ip}: FAILED")
-        
-        # Step 3: If still short, log but can't do much about non-Vnish miners
-        if active_count < miners_needed and cannot_control:
+
+        # Step 3: If still short, try non-Vnish miners as a fallback
+        if active_count < miners_needed and fallback_wake:
+            sorted_fallback = sorted(fallback_wake, key=lambda m: m.ip)
+            for miner in sorted_fallback:
+                if active_count >= miners_needed:
+                    break
+
+                ok, msg = await self.discovery.set_miner_active(miner.id)
+                if ok:
+                    success_count += 1
+                    active_count += 1
+                    results.append(f"{miner.ip}: ON (fallback)")
+                    logger.info("Fallback miner wake command sent", ip=miner.ip)
+                else:
+                    logger.warning("Fallback wake failed", ip=miner.ip, error=msg)
+                    results.append(f"{miner.ip}: FAILED")
+
+        # Step 4: If still short, log capacity shortfall
+        if active_count < miners_needed:
             logger.warning(
-                "Cannot reach target - some miners lack Vnish firmware",
+                "Cannot reach target - insufficient responsive miners",
                 target_miners=miners_needed,
                 active_miners=active_count,
-                uncontrollable_count=len(cannot_control),
-                uncontrollable_ips=[m.ip for m in cannot_control[:5]]  # First 5
+                fallback_count=len(fallback_wake),
+                fallback_ips=[m.ip for m in fallback_wake[:5]]
             )
         
         # Log detailed results
