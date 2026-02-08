@@ -569,7 +569,8 @@ class FleetManager:
                 online_count += 1
                 if state.is_mining:
                     mining_count += 1
-                    total_power_kw += state.power_kw
+                    # Some miners don't report power; fall back to rated estimate
+                    total_power_kw += state.power_kw if state.power_kw > 0 else state.rated_power_kw
                 else:
                     # Idle but online miners still consume ~18W for control board
                     total_power_kw += IDLE_POWER_KW
