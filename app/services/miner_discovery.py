@@ -77,6 +77,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 import structlog
 
+from app.config import get_settings
 logger = structlog.get_logger()
 
 
@@ -332,17 +333,18 @@ class VnishWebAPI:
     def __init__(
         self,
         host: str,
-        port: int = 80,
-        username: str = "root",
-        password: str = "root",
+        port: Optional[int] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
         timeout: float = 10.0
     ):
+        settings = get_settings()
         self.host = host
-        self.port = port
-        self.username = username
-        self.password = password
+        self.port = port if port is not None else settings.vnish_port
+        self.username = username if username is not None else settings.vnish_username
+        self.password = password if password is not None else settings.vnish_password
         self.timeout = timeout
-        self.base_url = f"http://{host}:{port}"
+        self.base_url = f"http://{host}:{self.port}"
     
     async def _request(self, endpoint: str, method: str = "GET", data: str = None) -> Dict[str, Any]:
         """

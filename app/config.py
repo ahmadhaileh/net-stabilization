@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     miner_api_timeout: float = 5.0  # Timeout for API calls
     auto_discovery_on_startup: bool = True  # Run discovery on startup
     discovery_interval_minutes: int = 30  # Periodic re-discovery interval
+    vnish_username: str = "root"  # Vnish Web API username
+    vnish_password: str = "root"  # Vnish Web API password
+    vnish_port: int = 80  # Vnish Web API port
     
     # Server Configuration
     host_port: int = 8080
