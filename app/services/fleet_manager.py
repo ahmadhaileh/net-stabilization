@@ -907,24 +907,39 @@ class FleetManager:
         can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
         fallback_wake = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
 
-        # Estimate per-miner CONSUMPTION from real readings (for miners_needed calc)
-        power_sample_miners = can_wake + already_mining
-        consumption_samples = [
-            m.power_watts for m in power_sample_miners
-            if m.is_mining and m.power_watts > 0
-        ]
-        if len(consumption_samples) < 3:
-            consumption_samples = [
-                m.rated_power_watts for m in power_sample_miners
-                if m.rated_power_watts > 0
-            ]
-        if not consumption_samples:
-            consumption_samples = [
-                m.rated_power_watts for m in all_miners
-                if m.rated_power_watts > 0
-            ]
+        # Estimate per-miner CONSUMPTION for miners_needed calculation
+        # Best source: actual fleet power / mining count (ground truth from status)
+        actual_fleet_power_kw = self._status.active_power_kw
+        mining_count = len(already_mining)
 
-        per_miner_watts = median(consumption_samples) if consumption_samples else 1400.0
+        if mining_count >= 3 and actual_fleet_power_kw > 1.0:
+            # Use real observed average — most accurate
+            per_miner_watts = (actual_fleet_power_kw * 1000.0) / mining_count
+            logger.debug(
+                "Per-miner power from fleet average",
+                fleet_kw=actual_fleet_power_kw,
+                mining_count=mining_count,
+                per_miner_w=round(per_miner_watts)
+            )
+        else:
+            # Fallback: use individual miner readings or rated power
+            power_sample_miners = can_wake + already_mining
+            consumption_samples = [
+                m.power_watts for m in power_sample_miners
+                if m.is_mining and m.power_watts > 0
+            ]
+            if len(consumption_samples) < 3:
+                consumption_samples = [
+                    m.rated_power_watts for m in power_sample_miners
+                    if m.rated_power_watts > 0
+                ]
+            if not consumption_samples:
+                consumption_samples = [
+                    m.rated_power_watts for m in all_miners
+                    if m.rated_power_watts > 0
+                ]
+            per_miner_watts = median(consumption_samples) if consumption_samples else 1400.0
+
         per_miner_watts = max(800.0, min(per_miner_watts, 3500.0))
         per_miner_kw = per_miner_watts / 1000.0
 
