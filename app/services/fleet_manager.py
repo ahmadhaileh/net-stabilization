@@ -427,6 +427,20 @@ class FleetManager:
                     # Use fresh target value (not cached)
                     target_power_kw = self._target_power_kw
                     
+                    # If actual < target: check if all miners are already active
+                    # If so, we're at max capacity - nothing more we can do
+                    if actual_power_kw < target_power_kw and self._use_direct_mode:
+                        all_online = [m for m in self.discovery.miners if m.is_online]
+                        idle_miners = [m for m in all_online if not m.is_mining]
+                        if not idle_miners:
+                            logger.debug(
+                                "Regulation skipped - at max capacity (all miners active)",
+                                target_kw=target_power_kw,
+                                actual_kw=actual_power_kw,
+                                mining_miners=len(all_online) - len(idle_miners)
+                            )
+                            continue
+                    
                     logger.info(
                         "Power deviation detected, re-adjusting",
                         target_kw=target_power_kw,
@@ -893,41 +907,50 @@ class FleetManager:
         can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
         fallback_wake = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
 
-        # Estimate per-miner power from real readings when possible
+        # Estimate per-miner CONSUMPTION from real readings (for miners_needed calc)
         power_sample_miners = can_wake + already_mining
-        power_samples = [
+        consumption_samples = [
             m.power_watts for m in power_sample_miners
             if m.is_mining and m.power_watts > 0
         ]
-        if len(power_samples) < 3:
-            power_samples = [
+        if len(consumption_samples) < 3:
+            consumption_samples = [
                 m.rated_power_watts for m in power_sample_miners
                 if m.rated_power_watts > 0
             ]
-        if not power_samples:
-            power_samples = [
+        if not consumption_samples:
+            consumption_samples = [
                 m.rated_power_watts for m in all_miners
                 if m.rated_power_watts > 0
             ]
 
-        per_miner_watts = median(power_samples) if power_samples else 1400.0
+        per_miner_watts = median(consumption_samples) if consumption_samples else 1400.0
         per_miner_watts = max(800.0, min(per_miner_watts, 3500.0))
         per_miner_kw = per_miner_watts / 1000.0
+
+        # Use RATED power for capacity estimation (stable, doesn't fluctuate)
+        # This prevents the target from being wrongly clamped down when actual
+        # consumption differs from rated (e.g. 2-of-3 hashboards = 966W vs 1400W rated)
+        rated_samples = [m.rated_power_watts for m in all_miners if m.rated_power_watts > 0]
+        capacity_per_miner_watts = median(rated_samples) if rated_samples else 1400.0
 
         max_possible_miners = len(already_mining) + len(can_wake) + len(fallback_wake)
         if max_possible_miners == 0:
             return False, "No controllable miners available for activation"
 
-        max_possible_kw = (max_possible_miners * per_miner_watts) / 1000.0
+        max_possible_kw = (max_possible_miners * capacity_per_miner_watts) / 1000.0
         if target_power_kw > max_possible_kw:
             logger.warning(
-                "Target exceeds controllable capacity, clamping",
+                "Target exceeds rated capacity, clamping locally",
                 requested_kw=target_power_kw,
                 max_possible_kw=round(max_possible_kw, 2),
-                controllable_miners=max_possible_miners
+                controllable_miners=max_possible_miners,
+                capacity_per_miner_w=round(capacity_per_miner_watts)
             )
             target_power_kw = max_possible_kw
-            self._target_power_kw = target_power_kw
+            # NOTE: Do NOT overwrite self._target_power_kw here.
+            # The stored target should only be set by activate() / EMS commands.
+            # Clamping is local to this call to prevent over-wake.
 
         # Calculate how many miners to turn on
         target_power_watts = target_power_kw * 1000
