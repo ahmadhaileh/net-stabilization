@@ -106,10 +106,12 @@ class FleetManager:
         # Power regulation settings
         self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
         self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
-        self._regulation_warmup_seconds: int = 90  # Wait after activation before regulating
-        self._regulation_cooldown_seconds: int = 60  # Wait after adjustment before next one
+        self._regulation_warmup_seconds: int = 150  # Wait 2.5 min for miners to boot before regulating
+        self._regulation_cooldown_seconds: int = 30  # Default cooldown (trim-down is instant)
+        self._regulation_rampup_cooldown_seconds: int = 90  # Longer cooldown after waking miners
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
+        self._last_regulation_was_rampup: bool = False  # Track if last adjustment was ramp-up
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -373,13 +375,17 @@ class FleetManager:
                         continue
                 
                 # Cooldown buffer: Skip if recent adjustment
+                # Use longer cooldown after ramp-up (miners need boot time)
+                # Use shorter cooldown after trim-down (instant effect)
                 if self._last_regulation_adjustment_time:
                     elapsed_since_adjustment = (datetime.utcnow() - self._last_regulation_adjustment_time).total_seconds()
-                    if elapsed_since_adjustment < self._regulation_cooldown_seconds:
+                    cooldown = self._regulation_rampup_cooldown_seconds if self._last_regulation_was_rampup else self._regulation_cooldown_seconds
+                    if elapsed_since_adjustment < cooldown:
                         logger.debug(
                             "Regulation skipped - cooldown period",
                             elapsed_s=round(elapsed_since_adjustment),
-                            cooldown_s=self._regulation_cooldown_seconds
+                            cooldown_s=cooldown,
+                            was_rampup=self._last_regulation_was_rampup
                         )
                         continue
                 
@@ -452,15 +458,119 @@ class FleetManager:
                     # Mark adjustment time for cooldown
                     self._last_regulation_adjustment_time = datetime.utcnow()
                     
-                    # Re-activate with same target to adjust miner allocations
-                    # Use internal method to avoid locking issues
-                    if self._use_direct_mode:
+                    # Smart regulation: trim-down is instant, ramp-up needs time
+                    if self._use_direct_mode and self._power_control_mode == "on_off":
+                        await self._regulate_on_off(actual_power_kw, target_power_kw)
+                    elif self._use_direct_mode:
                         await self._activate_fleet_direct(target_power_kw)
                     else:
                         await self._activate_fleet_awesomeminer(target_power_kw)
                         
             except Exception as e:
                 logger.error("Error in regulation loop", error=str(e))
+    
+    async def _regulate_on_off(self, actual_power_kw: float, target_power_kw: float):
+        """
+        Smart on/off regulation using actual fleet data.
+        
+        Unlike the full _activate_fleet_on_off_mode (which uses fixed 1460W estimate
+        for initial activation), this method uses the ACTUAL fleet average per-miner
+        power for precise trim/ramp adjustments.
+        
+        Key insight: turning miners OFF is instant, turning ON takes ~2 min.
+        So we prefer trimming down over ramping up, and we act conservatively
+        when ramping up (miners may still be booting from a previous cycle).
+        """
+        mining_miners = sorted(
+            [m for m in self.discovery.miners if m.is_online and m.is_mining],
+            key=lambda m: m.ip
+        )
+        idle_miners = sorted(
+            [m for m in self.discovery.miners if m.is_online and not m.is_mining],
+            key=lambda m: m.ip
+        )
+        mining_count = len(mining_miners)
+        
+        if mining_count == 0:
+            logger.warning("Regulation: no mining miners, deferring to full activation")
+            self._last_regulation_was_rampup = True
+            await self._activate_fleet_direct(target_power_kw)
+            return
+        
+        # Use actual fleet average for precise per-miner estimate
+        per_miner_kw = actual_power_kw / mining_count
+        
+        if actual_power_kw > target_power_kw:
+            # === TRIM DOWN (instant) ===
+            excess_kw = actual_power_kw - target_power_kw
+            miners_to_trim = max(1, round(excess_kw / per_miner_kw))
+            # Don't trim more than we have
+            miners_to_trim = min(miners_to_trim, mining_count - 1)
+            
+            logger.info(
+                "Regulation: trimming excess miners (instant)",
+                actual_kw=round(actual_power_kw, 1),
+                target_kw=round(target_power_kw, 1),
+                excess_kw=round(excess_kw, 1),
+                per_miner_kw=round(per_miner_kw, 3),
+                miners_to_trim=miners_to_trim,
+                mining_count=mining_count
+            )
+            
+            # Shut off the last N miners (by IP, deterministic order)
+            miners_to_idle = mining_miners[-miners_to_trim:]
+            trimmed = 0
+            for miner in miners_to_idle:
+                ok, msg = await self.discovery.set_miner_idle(miner.id)
+                if ok:
+                    trimmed += 1
+                    logger.info("Regulation trimmed miner", ip=miner.ip)
+                else:
+                    logger.warning("Failed to trim miner", ip=miner.ip, error=msg)
+            
+            logger.info(
+                "Regulation trim complete",
+                trimmed=trimmed,
+                expected_power_kw=round(actual_power_kw - (trimmed * per_miner_kw), 1)
+            )
+            self._last_regulation_was_rampup = False
+            
+        else:
+            # === RAMP UP (slow — miners take ~2 min to boot) ===
+            deficit_kw = target_power_kw - actual_power_kw
+            miners_to_wake = max(1, round(deficit_kw / per_miner_kw))
+            # Add 1-2 extra for overshoot strategy (trim is instant later)
+            miners_to_wake = min(miners_to_wake + 2, len(idle_miners))
+            
+            if not idle_miners:
+                logger.info("Regulation: no idle miners to wake, at capacity")
+                return
+            
+            logger.info(
+                "Regulation: waking additional miners",
+                actual_kw=round(actual_power_kw, 1),
+                target_kw=round(target_power_kw, 1),
+                deficit_kw=round(deficit_kw, 1),
+                per_miner_kw=round(per_miner_kw, 3),
+                miners_to_wake=miners_to_wake,
+                idle_available=len(idle_miners)
+            )
+            
+            woken = 0
+            for miner in idle_miners[:miners_to_wake]:
+                ok, msg = await self.discovery.set_miner_active(miner.id)
+                if ok:
+                    woken += 1
+                    logger.info("Regulation woke miner", ip=miner.ip)
+                else:
+                    logger.warning("Failed to wake miner", ip=miner.ip, error=msg)
+            
+            logger.info(
+                "Regulation ramp-up commands sent",
+                woken=woken,
+                expected_power_kw=round(actual_power_kw + (woken * per_miner_kw), 1)
+            )
+            self._last_regulation_was_rampup = True
     
     async def _idle_enforcement_loop(self):
         """
@@ -907,40 +1017,13 @@ class FleetManager:
         can_wake = [m for m in all_miners if not m.is_mining and m.firmware_type == FirmwareType.VNISH]
         fallback_wake = [m for m in all_miners if not m.is_mining and m.firmware_type != FirmwareType.VNISH]
 
-        # Estimate per-miner CONSUMPTION for miners_needed calculation
-        # Best source: actual fleet power / mining count (ground truth from status)
-        actual_fleet_power_kw = self._status.active_power_kw
-        mining_count = len(already_mining)
-
-        if mining_count >= 3 and actual_fleet_power_kw > 1.0:
-            # Use real observed average — most accurate
-            per_miner_watts = (actual_fleet_power_kw * 1000.0) / mining_count
-            logger.debug(
-                "Per-miner power from fleet average",
-                fleet_kw=actual_fleet_power_kw,
-                mining_count=mining_count,
-                per_miner_w=round(per_miner_watts)
-            )
-        else:
-            # Fallback: use individual miner readings or rated power
-            power_sample_miners = can_wake + already_mining
-            consumption_samples = [
-                m.power_watts for m in power_sample_miners
-                if m.is_mining and m.power_watts > 0
-            ]
-            if len(consumption_samples) < 3:
-                consumption_samples = [
-                    m.rated_power_watts for m in power_sample_miners
-                    if m.rated_power_watts > 0
-                ]
-            if not consumption_samples:
-                consumption_samples = [
-                    m.rated_power_watts for m in all_miners
-                    if m.rated_power_watts > 0
-                ]
-            per_miner_watts = median(consumption_samples) if consumption_samples else 1400.0
-
-        per_miner_watts = max(800.0, min(per_miner_watts, 3500.0))
+        # Use FIXED rated power estimate for calculating miners needed.
+        # Each Antminer S9 delivers ~1460W at full hashrate.
+        # Using a fixed value prevents cascading recalculations as the fleet-
+        # average fluctuates wildly during miner boot-up (some report 966W
+        # with 2/3 hashboards, some draw 2kW while ramping, etc.).
+        # The regulation loop will fine-tune using actual fleet average later.
+        per_miner_watts = 1460.0
         per_miner_kw = per_miner_watts / 1000.0
 
         # Use RATED power for capacity estimation (stable, doesn't fluctuate)
@@ -978,6 +1061,23 @@ class FleetManager:
 
         # Clamp to controllable miners
         miners_needed = min(miners_needed, max_possible_miners)
+
+        # OVERSHOOT strategy: turn on MORE miners than needed, then trim excess.
+        # Rationale: turning miners OFF is instant (<1s), turning ON takes ~2 min.
+        # Overshooting then trimming reaches target in ~3 min vs 15+ min incrementally.
+        miners_to_wake = miners_needed - len(already_mining)
+        if miners_to_wake > 5:
+            # Significant ramp-up: add 10% overshoot buffer
+            overshoot = max(3, int(miners_needed * 0.10))
+            miners_needed_buffered = min(miners_needed + overshoot, max_possible_miners)
+            logger.info(
+                "Overshoot buffer applied for fast convergence",
+                base_needed=miners_needed,
+                overshoot=overshoot,
+                total_with_buffer=miners_needed_buffered,
+                miners_to_wake=miners_to_wake
+            )
+            miners_needed = miners_needed_buffered
         
         logger.info(
             "On/Off power control - smart selection",
@@ -986,7 +1086,7 @@ class FleetManager:
             already_mining=len(already_mining),
             can_wake=len(can_wake),
             cannot_control=len(fallback_wake),
-            full_power_kw=per_miner_kw
+            per_miner_kw=per_miner_kw
         )
         
         success_count = 0
