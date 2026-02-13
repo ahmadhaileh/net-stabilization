@@ -14,6 +14,8 @@ services:
             - LOG_LEVEL=${LOG_LEVEL:-INFO}
             - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-5}
             - DATABASE_URL=sqlite+aiosqlite:///./data/netstab.db
+            - MINER_NETWORK_CIDR=${MINER_NETWORK_CIDR:-192.168.95.0/24}
+            - MINER_DISCOVERY_ENABLED=${MINER_DISCOVERY_ENABLED:-true}
             - MIN_POWER_THRESHOLD_KW=${MIN_POWER_THRESHOLD_KW:-1.0}
             - POWER_RAMP_RATE_KW_PER_SEC=${POWER_RAMP_RATE_KW_PER_SEC:-50.0}
         volumes:

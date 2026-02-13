@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     
     # Direct Miner Discovery Configuration
     miner_discovery_enabled: bool = True  # Enable auto-discovery
-    miner_network_cidr: str = "192.168.1.0/24"  # Network to scan
+    miner_network_cidr: str = "192.168.95.0/24"  # Network to scan
     miner_api_port: int = 4028  # CGMiner API port
     miner_scan_timeout: float = 1.0  # Timeout for discovery probes
     miner_api_timeout: float = 5.0  # Timeout for API calls

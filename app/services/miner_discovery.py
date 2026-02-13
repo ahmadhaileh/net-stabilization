@@ -926,7 +926,7 @@ class MinerDiscoveryService:
     
     def __init__(
         self,
-        network_cidr: str = "192.168.1.0/24",
+        network_cidr: str = "192.168.95.0/24",
         scan_ports: List[int] = None,
         scan_timeout: float = 1.0,
         api_timeout: float = 5.0
