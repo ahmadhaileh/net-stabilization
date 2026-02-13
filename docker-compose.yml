@@ -5,10 +5,9 @@ services:
             dockerfile: Dockerfile
         container_name: net-stabilization
         restart: unless-stopped
-        ports:
-            - '${HOST_PORT:-8080}:8080'
+        network_mode: host
         environment:
-            - AWESOME_MINER_HOST=${AWESOME_MINER_HOST:-host.docker.internal}
+            - AWESOME_MINER_HOST=${AWESOME_MINER_HOST:-localhost}
             - AWESOME_MINER_PORT=${AWESOME_MINER_PORT:-17790}
             - AWESOME_MINER_API_KEY=${AWESOME_MINER_API_KEY:-}
             - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -20,10 +19,6 @@ services:
             - POWER_RAMP_RATE_KW_PER_SEC=${POWER_RAMP_RATE_KW_PER_SEC:-50.0}
         volumes:
             - ./data:/app/data
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        networks:
-            - miner-network
         healthcheck:
             test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
             interval: 30s
@@ -41,7 +36,3 @@ services:
                     memory: 512M
                 reservations:
                     memory: 128M
-
-networks:
-    miner-network:
-        driver: bridge
