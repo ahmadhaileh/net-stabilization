@@ -1,9 +1,9 @@
 services:
-    net-stabilization:
+    grid-stabilization:
         build:
             context: .
             dockerfile: Dockerfile
-        container_name: net-stabilization
+        container_name: grid-stabilization
         restart: unless-stopped
         network_mode: host
         environment:

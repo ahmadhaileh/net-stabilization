@@ -1,6 +1,6 @@
 [Unit]
-Description=Net Stabilization - Mining Fleet Power Control
-Documentation=https://github.com/dkk/net-stabilization
+Description=Grid Stabilization - Mining Fleet Power Control
+Documentation=https://github.com/ahmadhaileh/net-stabilization
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target

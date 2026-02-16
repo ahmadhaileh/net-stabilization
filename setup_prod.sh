@@ -1,14 +1,14 @@
 #!/bin/bash
 # =============================================================================
-# Net Stabilization - Production Setup Script
+# Grid Stabilization - Production Setup Script
 # =============================================================================
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_NAME="net-stabilization"
+SERVICE_NAME="grid-stabilization"
 
 echo "=========================================="
-echo "Net Stabilization - Production Setup"
+echo "Grid Stabilization - Production Setup"
 echo "=========================================="
 echo ""
 
@@ -67,14 +67,14 @@ echo ""
 echo "[5/5] Setting up auto-start..."
 
 if [ "$IS_ROOT" = true ]; then
-    cp "$SCRIPT_DIR/net-stabilization.service" /etc/systemd/system/
+    cp "$SCRIPT_DIR/net-stabilization.service" /etc/systemd/system/grid-stabilization.service
     systemctl daemon-reload
     systemctl enable $SERVICE_NAME
     echo "  ✓ Systemd service installed and enabled"
 else
     echo "  ⚠ Not running as root - skipping systemd installation"
     echo "    To install systemd service, run:"
-    echo "    sudo cp $SCRIPT_DIR/net-stabilization.service /etc/systemd/system/"
+    echo "    sudo cp $SCRIPT_DIR/net-stabilization.service /etc/systemd/system/grid-stabilization.service"
     echo "    sudo systemctl daemon-reload"
     echo "    sudo systemctl enable $SERVICE_NAME"
 fi

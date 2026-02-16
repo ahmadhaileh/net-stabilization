@@ -1,5 +1,5 @@
 /**
- * Net Stabilization Dashboard - Enhanced
+ * Grid Stabilization Dashboard - Enhanced
  * Real-time miner monitoring and control
  */
 
@@ -850,6 +850,14 @@ async function handleIdleAll() {
 async function handleResumeAll() {
     const power = state.ratedPower;
 
+    const confirmed = await showConfirm({
+        title: 'Resume All Miners',
+        message: `Resume mining on all miners at full rated power (${power.toFixed(1)} kW)?`,
+        type: 'info',
+        confirmText: 'Resume All',
+    });
+    if (!confirmed) return;
+
     try {
         const response = await fetch(`${CONFIG.emsBase}/activate`, {
             method: 'POST',
@@ -1277,13 +1285,22 @@ function extractPoolName(url) {
     try {
         const match = url.match(/\/\/([^:\/]+)/);
         if (match) {
-            const host = match[1];
-            // Extract main domain part
-            const parts = host.split('.');
+            const domain = match[1];
+            // Known pool shortcuts
+            if (domain.includes('f2pool')) return 'f2pool';
+            if (domain.includes('antpool')) return 'antpool';
+            if (domain.includes('viabtc')) return 'viabtc';
+            if (domain.includes('slush')) return 'slushpool';
+            if (domain.includes('nicehash')) return 'nicehash';
+            if (domain.includes('poolin')) return 'poolin';
+            if (domain.includes('btc.com')) return 'btc.com';
+            if (domain.includes('binance')) return 'binance';
+            // Fallback: extract main domain part
+            const parts = domain.split('.');
             if (parts.length >= 2) {
                 return parts[parts.length - 2];
             }
-            return host;
+            return domain;
         }
     } catch (e) {}
     return '--';
@@ -1445,45 +1462,6 @@ async function blinkMiner(minerIp) {
 // Pool Configuration Handlers
 // =========================================================================
 
-async function handleUpdatePoolSingle() {
-    const minerIP = getSelectedMinerIP();
-    const poolUrl = $('pool-url').value.trim();
-    const worker = $('pool-worker').value.trim();
-    const password = $('pool-password').value.trim() || 'x';
-
-    if (!poolUrl) {
-        showToast('Please enter a pool URL', 'error');
-        return;
-    }
-    if (!worker) {
-        showToast('Please enter a worker name', 'error');
-        return;
-    }
-
-    try {
-        showToast(`Updating pool on ${minerIP}...`, 'info');
-        const response = await fetch(`${CONFIG.apiBase}/pool/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                miner_ip: minerIP,
-                pool_url: poolUrl,
-                worker: worker,
-                password: password,
-            }),
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            showToast(`Pool updated on ${minerIP}`, 'success');
-        } else {
-            showToast(data.error || 'Failed to update pool', 'error');
-        }
-    } catch (error) {
-        showToast('Error updating pool', 'error');
-    }
-}
-
 async function handleUpdatePoolAll() {
     const poolUrl = $('pool-url').value.trim();
     const worker = $('pool-worker').value.trim();
@@ -1596,11 +1574,9 @@ function updateAnomalyDisplay() {
     // Update stats
     const availEl = $('fleet-availability');
     const powerEl = $('max-sustained-power');
-    const downtimeEl = $('total-downtime');
 
     if (availEl) availEl.textContent = anomalyStats.fleetAvailability.toFixed(1) + '%';
     if (powerEl) powerEl.textContent = anomalyStats.maxSustainedPower.toFixed(1) + ' kW';
-    if (downtimeEl) downtimeEl.textContent = formatDowntime(anomalyStats.totalDowntime);
 
     // Update list
     const list = $('anomaly-list');
@@ -1852,8 +1828,8 @@ function runFleetAnomalyDetection() {
 
 function saveAnomalies() {
     try {
-        localStorage.setItem('net-stabilization-anomalies', JSON.stringify(anomalies));
-        localStorage.setItem('net-stabilization-anomaly-stats', JSON.stringify(anomalyStats));
+        localStorage.setItem('grid-stabilization-anomalies', JSON.stringify(anomalies));
+        localStorage.setItem('grid-stabilization-anomaly-stats', JSON.stringify(anomalyStats));
     } catch (e) {
         console.warn('Could not save anomalies to localStorage');
     }
@@ -1861,8 +1837,8 @@ function saveAnomalies() {
 
 function loadAnomalies() {
     try {
-        const saved = localStorage.getItem('net-stabilization-anomalies');
-        const savedStats = localStorage.getItem('net-stabilization-anomaly-stats');
+        const saved = localStorage.getItem('grid-stabilization-anomalies');
+        const savedStats = localStorage.getItem('grid-stabilization-anomaly-stats');
         if (saved) {
             anomalies = JSON.parse(saved);
         }
@@ -2270,29 +2246,29 @@ function handleGraphMinerChange() {
 function updateGraphCurrentValuesForMiner(minerIp) {
     const miner = state.discoveredMiners.find((m) => m.ip === minerIp);
     if (miner) {
-        const hashrate = miner.hashrate || 0;
-        const power = miner.power_w ? miner.power_w / 1000 : 0;
-        const temp = miner.temp_chip || miner.temp || 0;
+        const hashrateGhs = parseFloat(miner.hashrate_ghs) || 0;
+        const powerKw = miner.power_kw || 0;
+        const temp = miner.temperature_c || 0;
 
-        $('graph-hashrate-current').textContent = (hashrate / 1000).toFixed(2) + ' TH/s';
-        $('graph-power-current').textContent = power.toFixed(2) + ' kW';
+        $('graph-hashrate-current').textContent = (hashrateGhs / 1000).toFixed(2) + ' TH/s';
+        $('graph-power-current').textContent = powerKw.toFixed(2) + ' kW';
         $('graph-temp-current').textContent = temp > 0 ? temp.toFixed(0) + ' °C' : '-- °C';
     }
 }
 
 function updateGraphCurrentValues() {
     // Sum all fleet values
-    let totalHashrate = 0;
-    let totalPower = 0;
+    let totalHashrateGhs = 0;
+    let totalPowerKw = 0;
     let totalTemp = 0;
     let tempCount = 0;
 
     state.discoveredMiners.forEach((m) => {
         if (m.is_online) {
-            totalHashrate += m.hashrate || 0;
-            totalPower += m.power_w ? m.power_w / 1000 : 0;
-            if (m.temp_chip || m.temp) {
-                totalTemp += m.temp_chip || m.temp;
+            totalHashrateGhs += parseFloat(m.hashrate_ghs) || 0;
+            totalPowerKw += m.power_kw || 0;
+            if (m.temperature_c > 0) {
+                totalTemp += m.temperature_c;
                 tempCount++;
             }
         }
@@ -2300,8 +2276,8 @@ function updateGraphCurrentValues() {
 
     const avgTemp = tempCount > 0 ? totalTemp / tempCount : 0;
 
-    $('graph-hashrate-current').textContent = (totalHashrate / 1000).toFixed(2) + ' TH/s';
-    $('graph-power-current').textContent = totalPower.toFixed(2) + ' kW';
+    $('graph-hashrate-current').textContent = (totalHashrateGhs / 1000).toFixed(2) + ' TH/s';
+    $('graph-power-current').textContent = totalPowerKw.toFixed(2) + ' kW';
     $('graph-temp-current').textContent = avgTemp > 0 ? avgTemp.toFixed(0) + ' °C' : '-- °C';
 }
 
@@ -2314,7 +2290,7 @@ function saveHistory() {
             power: historyData.power.filter((p) => p.x.getTime() > cutoff),
             temp: historyData.temp.filter((p) => p.x.getTime() > cutoff),
         };
-        localStorage.setItem('net-stabilization-history', JSON.stringify(toSave));
+        localStorage.setItem('grid-stabilization-history', JSON.stringify(toSave));
     } catch (e) {
         console.warn('Could not save history to localStorage');
     }
@@ -2322,7 +2298,7 @@ function saveHistory() {
 
 function loadHistory() {
     try {
-        const saved = localStorage.getItem('net-stabilization-history');
+        const saved = localStorage.getItem('grid-stabilization-history');
         if (saved) {
             const parsed = JSON.parse(saved);
             historyData.hashrate = (parsed.hashrate || []).map((p) => ({ x: new Date(p.x), y: p.y }));
@@ -2409,29 +2385,6 @@ function updateModalChartsWithScope() {
         modalCharts.power.options.scales.x.max = maxTime;
         modalCharts.power.update('none');
     }
-}
-
-// Helper to extract pool name from URL
-function extractPoolName(poolUrl) {
-    if (!poolUrl) return null;
-    try {
-        // Extract domain from stratum URL
-        const match = poolUrl.match(/stratum\+tcp:\/\/([^:\/]+)/);
-        if (match) {
-            const domain = match[1];
-            // Extract short name from domain
-            if (domain.includes('f2pool')) return 'f2pool';
-            if (domain.includes('antpool')) return 'antpool';
-            if (domain.includes('viabtc')) return 'viabtc';
-            if (domain.includes('slush')) return 'slushpool';
-            if (domain.includes('nicehash')) return 'nicehash';
-            if (domain.includes('poolin')) return 'poolin';
-            if (domain.includes('btc.com')) return 'btc.com';
-            if (domain.includes('binance')) return 'binance';
-            return domain.split('.')[0];
-        }
-    } catch (e) {}
-    return poolUrl;
 }
 
 async function openMinerModal(minerIp) {
@@ -3837,7 +3790,6 @@ function disableAutoScan() {
 
 function setupNewEventListeners() {
     // Pool configuration
-    $('btn-update-pool-single')?.addEventListener('click', handleUpdatePoolSingle);
     $('btn-update-pool-all')?.addEventListener('click', handleUpdatePoolAll);
 
     // Anomaly detection

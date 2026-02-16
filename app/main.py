@@ -1,5 +1,5 @@
 """
-Net Stabilization - Mining Fleet Power Control System
+Grid Stabilization - Mining Fleet Power Control System
 
 Main FastAPI application entry point.
 """
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager for startup/shutdown."""
     # Startup
     logger.info(
-        "Starting Net Stabilization server",
+        "Starting Grid Stabilization server",
         awesome_miner_host=settings.awesome_miner_host,
         awesome_miner_port=settings.awesome_miner_port
     )
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    logger.info("Shutting down Net Stabilization server")
+    logger.info("Shutting down Grid Stabilization server")
     
     # Stop background tasks
     await fleet_manager.stop_polling()
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title="Net Stabilization",
+    title="Grid Stabilization",
     description="""
     Mining Fleet Power Control System for EMS Integration.
     
