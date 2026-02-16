@@ -703,7 +703,9 @@ class FleetManager:
                     estimated_power_kw += IDLE_POWER_KW
         
         # ── Power meter calibration ──────────────────────────────────
-        # Prefer the physical meter reading over summed miner estimates.
+        # Use PLANT total power for regulation (not just miners).
+        # The EMS cares about total plant consumption — that's the
+        # defining output that must hit the target ±5% margin.
         # The meter gives ground-truth; miner reports can be wrong when
         # miners lose connection but keep running.
         total_power_kw = estimated_power_kw  # default: use estimate
@@ -711,13 +713,13 @@ class FleetManager:
         if self.power_meter:
             meter_reading = await self.power_meter.get_power()
             if meter_reading is not None:
-                total_power_kw = meter_reading.miners_total_power_kw
+                total_power_kw = meter_reading.plant_total_power_kw
                 if abs(total_power_kw - estimated_power_kw) > 5.0:
                     logger.info(
                         "Power meter vs estimate divergence",
-                        meter_kw=round(total_power_kw, 2),
+                        plant_kw=round(total_power_kw, 2),
+                        miners_kw=round(meter_reading.miners_total_power_kw, 2),
                         estimated_kw=round(estimated_power_kw, 2),
-                        delta_kw=round(total_power_kw - estimated_power_kw, 2),
                     )
             else:
                 logger.debug(
