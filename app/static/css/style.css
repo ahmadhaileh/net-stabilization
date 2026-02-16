@@ -5569,3 +5569,751 @@ details.config-section[open] summary.config-section-title::before {
 .btn-preset.active .btn-icon {
     color: var(--accent-primary);
 }
+
+/* ==========================================================================
+   COMPREHENSIVE MOBILE RESPONSIVE STYLES
+   Organized from largest → smallest breakpoint
+   ========================================================================== */
+
+/* ---- Tablet landscape & small desktop (≤1024px) ---- */
+@media (max-width: 1024px) {
+    .graphs-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .fleet-metrics-row {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .fleet-metrics-row .fleet-metric:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .preset-buttons {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .board-hashrate-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ---- Tablet portrait (≤768px) ---- */
+@media (max-width: 768px) {
+    /* --- Header --- */
+    .header {
+        padding: var(--space-2) var(--space-3);
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .header-left {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .header h1 {
+        font-size: 0.95rem;
+    }
+
+    .header-right {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: var(--space-3);
+    }
+
+    .header-stat {
+        align-items: center;
+        min-width: 0;
+    }
+
+    .connection-status {
+        order: 10;
+        width: 100%;
+        justify-content: center;
+    }
+
+    .last-update-stat {
+        order: 11;
+    }
+
+    /* --- Main Content --- */
+    .main-content {
+        padding: var(--space-3);
+    }
+
+    /* --- Fleet Status --- */
+    .fleet-state-section {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+    }
+
+    .fleet-counts {
+        width: 100%;
+        justify-content: space-around;
+    }
+
+    .fleet-metrics-row {
+        grid-template-columns: 1fr;
+    }
+
+    .fleet-metrics-row .fleet-metric:last-child {
+        grid-column: auto;
+    }
+
+    /* --- EMS Card --- */
+    .ems-status-card {
+        padding: var(--space-3);
+    }
+
+    .ems-grid {
+        grid-template-columns: 1fr;
+        gap: var(--space-3);
+    }
+
+    .ems-endpoint {
+        flex-direction: column;
+    }
+
+    .ems-endpoint code {
+        width: 100%;
+        text-align: center;
+        word-break: break-all;
+    }
+
+    /* --- Graphs Section --- */
+    .graphs-section {
+        padding: var(--space-3);
+    }
+
+    .graphs-section .section-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+    }
+
+    .graph-controls {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .time-scope-buttons {
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .graphs-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .graph-container {
+        height: 180px;
+    }
+
+    /* --- Control Panel --- */
+    .control-header {
+        padding: var(--space-3) var(--space-3);
+    }
+
+    .control-sections {
+        padding: var(--space-3);
+    }
+
+    .control-sections.fleet-control-rows {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .control-sections.fleet-control-rows .control-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-2);
+    }
+
+    .control-row.actions-row {
+        flex-direction: column;
+    }
+
+    .control-row.actions-row .btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .control-row.pool-row {
+        flex-direction: column;
+    }
+
+    .pool-inputs {
+        grid-template-columns: 1fr;
+    }
+
+    .control-row.power-row {
+        flex-direction: column;
+    }
+
+    /* --- Discovery --- */
+    .discovery-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .add-miner-form {
+        flex-direction: column;
+    }
+
+    /* --- Miners Grid --- */
+    .miners-grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* --- Miner Card (touch-friendly) --- */
+    .miner-card {
+        min-height: auto;
+    }
+
+    .miner-card-footer {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    /* --- Rack View --- */
+    .rack-container {
+        flex-direction: column;
+    }
+
+    .rack-sidebar {
+        flex-direction: row;
+        overflow-x: auto;
+        width: 100%;
+        max-height: none;
+    }
+
+    /* --- Table View --- */
+    .table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .table-container table {
+        min-width: 700px;
+        font-size: 0.75rem;
+    }
+
+    .table-container th,
+    .table-container td {
+        padding: var(--space-2);
+        white-space: nowrap;
+    }
+
+    /* --- Anomaly Section --- */
+    .anomaly-section {
+        padding: var(--space-3);
+    }
+
+    .anomaly-section .section-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .anomaly-summary {
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    .fleet-health-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .anomaly-meta {
+        flex-direction: column;
+        gap: var(--space-1);
+    }
+
+    /* --- History Section --- */
+    .history-list {
+        font-size: 0.8rem;
+    }
+
+    /* --- Miner Detail Modal --- */
+    .miner-modal {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        border-radius: 0;
+        margin: 0;
+    }
+
+    .modal-overlay {
+        align-items: stretch;
+    }
+
+    .modal-header {
+        padding: var(--space-3);
+    }
+
+    .modal-header h2 {
+        font-size: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .modal-body {
+        padding: var(--space-3);
+    }
+
+    .modal-tabs {
+        flex-wrap: wrap;
+        gap: var(--space-1);
+    }
+
+    .modal-tab {
+        flex: 1 1 calc(33.33% - var(--space-1));
+        padding: var(--space-2);
+        font-size: 0.75rem;
+        text-align: center;
+    }
+
+    .detail-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .boards-container {
+        grid-template-columns: 1fr;
+    }
+
+    .modal-content .pool-inputs {
+        grid-template-columns: 1fr;
+    }
+
+    .modal-config-inputs {
+        grid-template-columns: 1fr;
+    }
+
+    .config-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .config-grid.per-board {
+        grid-template-columns: 1fr;
+    }
+
+    .pool-detail-row {
+        grid-template-columns: 1fr;
+    }
+
+    .system-info-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .board-hashrate-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .chip-health-summary {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .miner-chart-wrapper {
+        height: 120px;
+        min-height: 120px;
+        max-height: 120px;
+    }
+
+    .modal-controls {
+        flex-direction: column;
+    }
+
+    .modal-controls .btn {
+        width: 100%;
+        min-width: auto;
+    }
+
+    .modal-config-actions {
+        flex-direction: column;
+    }
+
+    .modal-config-actions .btn {
+        width: 100%;
+    }
+
+    .pool-edit-form .form-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .pool-edit-form .form-row label {
+        width: auto;
+    }
+
+    .pool-edit-actions {
+        flex-direction: column;
+    }
+
+    .pool-edit-actions .btn {
+        width: 100%;
+    }
+
+    .preset-buttons {
+        grid-template-columns: 1fr;
+    }
+
+    /* --- Toast Notifications --- */
+    .toast-container {
+        left: var(--space-3) !important;
+        right: var(--space-3) !important;
+        bottom: var(--space-3) !important;
+        max-width: 100%;
+    }
+
+    .toast {
+        min-width: auto;
+        width: 100%;
+    }
+
+    /* --- Confirm Modal --- */
+    .confirm-modal .modal-content,
+    .scan-modal .modal-content {
+        width: 95%;
+        max-width: 95%;
+        margin: 0 auto;
+    }
+
+    /* --- Footer --- */
+    .app-footer {
+        flex-direction: column;
+        text-align: center;
+        gap: var(--space-2);
+        padding: var(--space-3);
+    }
+
+    .footer-divider {
+        display: none;
+    }
+
+    /* --- Button row --- */
+    .button-row {
+        flex-direction: column;
+    }
+
+    .btn-large {
+        width: 100%;
+    }
+
+    /* --- Info tooltips (touch-friendly) --- */
+    .info-tooltip .info-text {
+        max-width: 250px;
+        font-size: 0.7rem;
+    }
+
+    /* --- View Mode Buttons --- */
+    .view-modes {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    /* --- Compact Grid (used by miner selector section) --- */
+    .compact-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .button-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ---- Small phones (≤480px) ---- */
+@media (max-width: 480px) {
+    /* --- Header --- */
+    .header {
+        padding: var(--space-2);
+    }
+
+    .brand-logo {
+        width: 24px;
+        height: 24px;
+    }
+
+    .header h1 {
+        font-size: 0.8rem;
+    }
+
+    .brand-separator {
+        display: none;
+    }
+
+    .header-stat .stat-label {
+        font-size: 0.55rem;
+    }
+
+    .header-stat .stat-value,
+    .stat-value {
+        font-size: 0.75rem;
+    }
+
+    .header-select {
+        font-size: 0.7rem;
+        min-width: 75px;
+        padding: var(--space-1) var(--space-5) var(--space-1) var(--space-2);
+    }
+
+    .connection-status {
+        font-size: 0.65rem;
+        padding: var(--space-1) var(--space-2);
+    }
+
+    /* --- Main Content --- */
+    .main-content {
+        padding: var(--space-2);
+    }
+
+    /* --- Fleet Status Card --- */
+    .fleet-status-card {
+        padding: var(--space-3);
+        gap: var(--space-3);
+    }
+
+    .count-value {
+        font-size: 1.25rem;
+    }
+
+    .fleet-metric-value {
+        font-size: 0.9rem;
+    }
+
+    /* --- EMS Card --- */
+    .ems-status-card {
+        padding: var(--space-3);
+    }
+
+    .ems-value {
+        font-size: 0.8rem;
+    }
+
+    /* --- Control Panel --- */
+    .control-panel {
+        border-radius: var(--radius-md);
+    }
+
+    .control-header h2 {
+        font-size: 0.75rem;
+    }
+
+    .override-badge {
+        font-size: 0.6rem;
+        padding: var(--space-1) var(--space-2);
+    }
+
+    /* --- Power Section --- */
+    .power-section {
+        padding: var(--space-2);
+    }
+
+    .meter-readings {
+        padding: var(--space-2);
+    }
+
+    .meter-row {
+        font-size: 0.7rem;
+    }
+
+    /* --- Graphs --- */
+    .graphs-section {
+        padding: var(--space-2);
+        border-radius: var(--radius-md);
+    }
+
+    .graph-header {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .graph-title {
+        font-size: 0.75rem;
+    }
+
+    .graph-value {
+        font-size: 0.85rem;
+    }
+
+    .graph-container {
+        height: 150px;
+        padding: var(--space-2);
+    }
+
+    .scope-btn {
+        padding: var(--space-1) var(--space-2);
+        font-size: 0.65rem;
+    }
+
+    /* --- Miner Cards --- */
+    .miner-card-header {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .miner-card-body {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .miner-card-footer {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    /* --- Modal (full-screen) --- */
+    .miner-modal {
+        border-radius: 0;
+    }
+
+    .modal-header {
+        padding: var(--space-3);
+    }
+
+    .modal-header h2 {
+        font-size: 0.9rem;
+    }
+
+    .modal-body {
+        padding: var(--space-2);
+    }
+
+    .modal-tab {
+        flex: 1 1 calc(33.33% - var(--space-1));
+        padding: var(--space-1) var(--space-2);
+        font-size: 0.65rem;
+    }
+
+    .detail-grid {
+        grid-template-columns: 1fr;
+        gap: var(--space-2);
+    }
+
+    .detail-value {
+        font-size: 0.85rem;
+    }
+
+    .board-stat-value {
+        font-size: 1rem;
+    }
+
+    .chip-health-summary {
+        flex-direction: column;
+    }
+
+    .miner-chart-wrapper {
+        height: 110px;
+        min-height: 110px;
+        max-height: 110px;
+    }
+
+    /* --- Anomaly Section --- */
+    .anomaly-section {
+        padding: var(--space-2);
+    }
+
+    .fleet-health-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .anomaly-item {
+        padding: var(--space-2);
+    }
+
+    .anomaly-message {
+        font-size: 0.8rem;
+    }
+
+    /* --- Toast --- */
+    .toast-container {
+        left: var(--space-2) !important;
+        right: var(--space-2) !important;
+        bottom: var(--space-2) !important;
+    }
+
+    .toast {
+        font-size: 0.8rem;
+        padding: var(--space-2) var(--space-3);
+    }
+
+    /* --- Footer --- */
+    .app-footer {
+        font-size: 0.6rem;
+        padding: var(--space-2);
+    }
+
+    /* --- Cards border radius smaller on mobile --- */
+    .fleet-status-card,
+    .ems-status-card,
+    .graphs-section,
+    .anomaly-section {
+        border-radius: var(--radius-md);
+    }
+
+    /* --- Preset Buttons --- */
+    .btn-preset {
+        padding: var(--space-3) var(--space-2);
+    }
+
+    .btn-preset span {
+        font-size: 0.75rem;
+    }
+
+    .btn-preset small {
+        font-size: 0.6rem;
+    }
+
+    /* --- Pool edit --- */
+    .pool-edit-group {
+        padding: var(--space-2);
+    }
+
+    /* --- Table --- */
+    .table-container table {
+        font-size: 0.7rem;
+    }
+}
+
+/* ---- Prevent horizontal overflow on all sizes ---- */
+html, body {
+    overflow-x: hidden;
+}
+
+.main-content {
+    overflow-x: hidden;
+}
+
+/* ---- Touch-friendly tap targets (44px minimum) ---- */
+@media (pointer: coarse) {
+    .btn,
+    .scope-btn,
+    .modal-tab,
+    .modal-close,
+    .view-mode-btn,
+    .modal-scope-btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .miner-card {
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Larger touch targets for controls */
+    input, select, textarea {
+        min-height: 44px;
+        font-size: 16px; /* Prevents iOS zoom on focus */
+    }
+
+    .header-select {
+        min-height: 36px;
+        font-size: 16px;
+    }
+
+    /* Checkbox/radio touch area */
+    input[type="checkbox"],
+    input[type="radio"] {
+        min-height: 24px;
+        min-width: 24px;
+    }
+}
