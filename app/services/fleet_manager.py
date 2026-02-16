@@ -830,12 +830,13 @@ class FleetManager:
             rated_power = self._config.rated_power_kw_override
         elif self.settings.rated_power_kw is not None:
             rated_power = self.settings.rated_power_kw
-        elif self._meter_calibration_count > 0:
-            # Meter-calibrated: actual per-miner × total fleet + plant overhead
+        else:
+            # Use meter-calibrated values (or initial defaults based on real measurements).
+            # Miner self-reports (~1.4 kW each → 121.8 kW fleet) overstate actual capacity
+            # (~1.2 kW each → ~110 kW fleet). The defaults are pre-loaded from test data
+            # and get refined by EMA once miners start running.
             total_miner_count = len(miner_states)
             rated_power = (self._actual_per_miner_kw * total_miner_count) + self._plant_overhead_kw
-        else:
-            rated_power = total_rated_kw
         
         # Check availability for dispatch
         is_available = (
