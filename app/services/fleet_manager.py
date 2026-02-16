@@ -32,6 +32,7 @@ from app.services.miner_discovery import (
     DiscoveredMiner
 )
 from app.services.vnish_power import VnishPowerService, get_vnish_power_service
+from app.services.power_meter import PowerMeterService, get_power_meter_service
 
 logger = structlog.get_logger()
 
@@ -72,11 +73,13 @@ class FleetManager:
             self.discovery.network_cidr = self.settings.miner_network_cidr
             self.am_client = None
             self.vnish_power = get_vnish_power_service()
+            self.power_meter = get_power_meter_service()
             logger.info("Fleet manager using DIRECT miner communication mode")
         else:
             self.am_client = am_client or get_awesome_miner_client()
             self.discovery = None
             self.vnish_power = None
+            self.power_meter = None
             logger.info("Fleet manager using AwesomeMiner mode")
         
         # Current fleet status
@@ -665,7 +668,7 @@ class FleetManager:
         
         # Build miner states
         miner_states = []
-        total_power_kw = 0.0
+        estimated_power_kw = 0.0
         total_rated_kw = 0.0
         online_count = 0
         mining_count = 0
@@ -694,14 +697,39 @@ class FleetManager:
                 if state.is_mining:
                     mining_count += 1
                     # Some miners don't report power; fall back to rated estimate
-                    total_power_kw += state.power_kw if state.power_kw > 0 else state.rated_power_kw
+                    estimated_power_kw += state.power_kw if state.power_kw > 0 else state.rated_power_kw
                 else:
                     # Idle but online miners still consume ~18W for control board
-                    total_power_kw += IDLE_POWER_KW
+                    estimated_power_kw += IDLE_POWER_KW
+        
+        # ── Power meter calibration ──────────────────────────────────
+        # Prefer the physical meter reading over summed miner estimates.
+        # The meter gives ground-truth; miner reports can be wrong when
+        # miners lose connection but keep running.
+        total_power_kw = estimated_power_kw  # default: use estimate
+        meter_reading = None
+        if self.power_meter:
+            meter_reading = await self.power_meter.get_power()
+            if meter_reading is not None:
+                total_power_kw = meter_reading.miners_total_power_kw
+                if abs(total_power_kw - estimated_power_kw) > 5.0:
+                    logger.info(
+                        "Power meter vs estimate divergence",
+                        meter_kw=round(total_power_kw, 2),
+                        estimated_kw=round(estimated_power_kw, 2),
+                        delta_kw=round(total_power_kw - estimated_power_kw, 2),
+                    )
+            else:
+                logger.debug(
+                    "Power meter unavailable, using miner estimates",
+                    estimated_kw=round(estimated_power_kw, 2),
+                )
         
         return self._finalize_status(
             miner_states, total_power_kw, total_rated_kw,
-            online_count, mining_count
+            online_count, mining_count,
+            measured_power_kw=meter_reading.miners_total_power_kw if meter_reading else None,
+            estimated_power_kw=estimated_power_kw,
         )
     
     async def _update_status_awesomeminer(self) -> FleetStatus:
@@ -747,7 +775,9 @@ class FleetManager:
         total_power_kw: float,
         total_rated_kw: float,
         online_count: int,
-        mining_count: int
+        mining_count: int,
+        measured_power_kw: Optional[float] = None,
+        estimated_power_kw: Optional[float] = None,
     ) -> FleetStatus:
         """Common status finalization logic."""
         # Determine fleet state and running status
@@ -769,6 +799,9 @@ class FleetManager:
             fleet_state not in [FleetState.FAULT, FleetState.UNKNOWN]
         )
         
+        # Determine power source
+        power_source = "meter" if measured_power_kw is not None else "estimate"
+        
         # Update status
         self._status = FleetStatus(
             state=fleet_state,
@@ -776,6 +809,9 @@ class FleetManager:
             running_status=running_status,
             rated_power_kw=rated_power,
             active_power_kw=round(total_power_kw, 2),
+            measured_power_kw=round(measured_power_kw, 2) if measured_power_kw is not None else None,
+            estimated_power_kw=round(estimated_power_kw, 2) if estimated_power_kw is not None else round(total_power_kw, 2),
+            power_source=power_source,
             target_power_kw=self._target_power_kw,
             total_miners=len(miner_states),
             online_miners=online_count,

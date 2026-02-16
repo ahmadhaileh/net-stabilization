@@ -17,6 +17,9 @@ services:
             - MINER_DISCOVERY_ENABLED=${MINER_DISCOVERY_ENABLED:-true}
             - MIN_POWER_THRESHOLD_KW=${MIN_POWER_THRESHOLD_KW:-1.0}
             - POWER_RAMP_RATE_KW_PER_SEC=${POWER_RAMP_RATE_KW_PER_SEC:-50.0}
+            - POWER_METER_ENABLED=${POWER_METER_ENABLED:-true}
+            - POWER_METER_HOST=${POWER_METER_HOST:-192.168.95.4}
+            - POWER_METER_PORT=${POWER_METER_PORT:-8044}
         volumes:
             - ./data:/app/data
         healthcheck:

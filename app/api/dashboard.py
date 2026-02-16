@@ -31,6 +31,9 @@ class FleetStatusResponse(BaseModel):
     running_status: int
     rated_power_kw: float
     active_power_kw: float
+    measured_power_kw: Optional[float] = None
+    estimated_power_kw: float = 0.0
+    power_source: str = "estimate"
     target_power_kw: Optional[float]
     total_miners: int
     online_miners: int
@@ -100,6 +103,9 @@ async def get_fleet_status():
         running_status=s.running_status.value,
         rated_power_kw=s.rated_power_kw,
         active_power_kw=s.active_power_kw,
+        measured_power_kw=s.measured_power_kw,
+        estimated_power_kw=s.estimated_power_kw,
+        power_source=s.power_source,
         target_power_kw=s.target_power_kw,
         total_miners=s.total_miners,
         online_miners=s.online_miners,

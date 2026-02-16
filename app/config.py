@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     vnish_password: str = "root"  # Vnish Web API password
     vnish_port: int = 80  # Vnish Web API port
     
+    # Power Meter (BESS EMS measurement device)
+    power_meter_enabled: bool = True  # Use physical meter for actual power
+    power_meter_host: str = "192.168.95.4"  # Meter IP
+    power_meter_port: int = 8044  # Meter API port
+    power_meter_timeout: float = 3.0  # HTTP timeout in seconds
+    
     # Server Configuration
     host_port: int = 8080
     log_level: str = "INFO"

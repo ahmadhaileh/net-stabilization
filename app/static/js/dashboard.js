@@ -191,6 +191,20 @@ function updateStatusDisplay() {
     $('rated-power').textContent = state.status.rated_power_kw.toFixed(1);
     $('total-power').textContent = state.status.active_power_kw.toFixed(1) + ' kW';
 
+    // Power source indicator
+    const badge = $('power-source-badge');
+    if (badge) {
+        if (state.status.power_source === 'meter') {
+            badge.textContent = 'METER';
+            badge.className = 'power-source-badge meter';
+            badge.title = 'Measured by physical power meter';
+        } else {
+            badge.textContent = 'EST';
+            badge.className = 'power-source-badge estimate';
+            badge.title = 'Estimated from miner reports';
+        }
+    }
+
     const powerPercent = state.ratedPower > 0 ? (state.status.active_power_kw / state.ratedPower) * 100 : 0;
     $('power-bar-fill').style.width = `${Math.min(powerPercent, 100)}%`;
     $('power-percent').textContent = `${powerPercent.toFixed(0)}%`;
