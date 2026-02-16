@@ -61,8 +61,8 @@ def run_test(target_kw, test_num):
     first_in_margin_time = None
     peak_power = 0
     
-    print(f"\n  {'Time':>6}  {'Elapsed':>8}  {'Meter kW':>9}  {'Est kW':>8}  {'Mining':>7}  {'Dev%':>6}  Status")
-    print(f"  {'-'*6}  {'-'*8}  {'-'*9}  {'-'*8}  {'-'*7}  {'-'*6}  {'-'*10}")
+    print(f"\n  {'Time':>6}  {'Elapsed':>8}  {'Plant kW':>9}  {'Miner kW':>9}  {'Mining':>7}  {'Dev%':>6}  Status")
+    print(f"  {'-'*6}  {'-'*8}  {'-'*9}  {'-'*9}  {'-'*7}  {'-'*6}  {'-'*10}")
     
     while True:
         elapsed = time.time() - start_time
@@ -73,7 +73,8 @@ def run_test(target_kw, test_num):
         
         try:
             status = get_status()
-            actual = status.get("measured_power_kw") or status.get("active_power_kw", 0)
+            actual = status.get("active_power_kw", 0)  # plant power (regulation target)
+            miners_kw = status.get("measured_power_kw", 0)
             estimated = status.get("estimated_power_kw", 0)
             mining = status["mining_miners"]
             total = status["total_miners"]
@@ -90,7 +91,7 @@ def run_test(target_kw, test_num):
             in_margin = within_margin(actual, target_kw, MARGIN_PERCENT)
             marker = " ✓ IN MARGIN" if in_margin else ""
             
-            print(f"  {datetime.now().strftime('%H:%M:%S'):>6}  {elapsed:>7.0f}s  {actual:>8.2f}  {estimated:>7.2f}  {mining:>3}/{total:<3}  {dev_pct:>+5.1f}%  {state}{marker}")
+            print(f"  {datetime.now().strftime('%H:%M:%S'):>6}  {elapsed:>7.0f}s  {actual:>8.2f}  {miners_kw:>8.2f}  {mining:>3}/{total:<3}  {dev_pct:>+5.1f}%  {state}{marker}")
             
             if in_margin and first_in_margin_time is None:
                 first_in_margin_time = elapsed
@@ -106,7 +107,7 @@ def run_test(target_kw, test_num):
                         time.sleep(POLL_INTERVAL)
                         elapsed2 = time.time() - start_time
                         status = get_status()
-                        actual2 = status.get("measured_power_kw") or status.get("active_power_kw", 0)
+                        actual2 = status.get("active_power_kw", 0)
                         mining2 = status["mining_miners"]
                         dev2 = (actual2 - target_kw) / target_kw * 100 if target_kw > 0 else 0
                         in2 = within_margin(actual2, target_kw, MARGIN_PERCENT)
@@ -145,11 +146,11 @@ def deactivate_and_wait():
     while time.time() - start < 300:  # Max 5 min wait
         time.sleep(10)
         status = get_status()
-        actual = status.get("measured_power_kw") or status.get("active_power_kw", 0)
+        actual = status.get("active_power_kw", 0)
         mining = status["mining_miners"]
         elapsed = time.time() - start
-        print(f"  ... {elapsed:.0f}s: {actual:.2f} kW, {mining} mining")
-        if actual < 5.0 and mining == 0:
+        print(f"  ... {elapsed:.0f}s: {actual:.2f} kW (plant), {mining} mining")
+        if actual < 10.0 and mining == 0:
             print(f"  Fleet idle after {elapsed:.0f}s")
             return True
     print(f"  WARNING: Fleet didn't fully idle in 5 min")
