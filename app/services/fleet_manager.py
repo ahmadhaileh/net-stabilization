@@ -384,17 +384,27 @@ class FleetManager:
                         continue
                 
                 # Cooldown buffer: Skip if recent adjustment
-                # Use longer cooldown after ramp-up (miners need boot time)
-                # Use shorter cooldown after trim-down (instant effect)
+                # Use DIRECTION-BASED cooldown: the cooldown depends on what
+                # action is NEEDED now, not what was done last.
+                # Trim-down is instant → short cooldown (30s) is fine.
+                # Ramp-up is slow → long cooldown (90s) needed for miners to boot.
                 if self._last_regulation_adjustment_time:
                     elapsed_since_adjustment = (datetime.utcnow() - self._last_regulation_adjustment_time).total_seconds()
-                    cooldown = self._regulation_rampup_cooldown_seconds if self._last_regulation_was_rampup else self._regulation_cooldown_seconds
+                    
+                    # Determine what direction we'd need to go
+                    current_power = self._status.active_power_kw
+                    current_target = self._target_power_kw or 0
+                    needs_trim = current_power > current_target  # Power too high → trim
+                    
+                    # Trim-down always uses short cooldown (instant effect)
+                    # Ramp-up uses long cooldown (miners need boot time)
+                    cooldown = self._regulation_cooldown_seconds if needs_trim else self._regulation_rampup_cooldown_seconds
                     if elapsed_since_adjustment < cooldown:
                         logger.debug(
                             "Regulation skipped - cooldown period",
                             elapsed_s=round(elapsed_since_adjustment),
                             cooldown_s=cooldown,
-                            was_rampup=self._last_regulation_was_rampup
+                            direction="trim" if needs_trim else "rampup"
                         )
                         continue
                 
@@ -551,8 +561,9 @@ class FleetManager:
             # === RAMP UP (slow — miners take ~2 min to boot) ===
             deficit_kw = target_power_kw - actual_power_kw
             miners_to_wake = max(1, round(deficit_kw / per_miner_kw))
-            # Add 1-2 extra for overshoot strategy (trim is instant later)
-            miners_to_wake = min(miners_to_wake + 2, len(idle_miners))
+            # Add 1 extra for slight overshoot (trim is instant later)
+            # Don't over-add — regulation fine-tunes, not bulk-activates
+            miners_to_wake = min(miners_to_wake + 1, len(idle_miners))
             
             if not idle_miners:
                 logger.info("Regulation: no idle miners to wake, at capacity")

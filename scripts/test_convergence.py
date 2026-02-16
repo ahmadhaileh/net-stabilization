@@ -157,7 +157,12 @@ def deactivate_and_wait():
     return False
 
 def main():
-    targets = [60, 90, 121]
+    # Get actual rated power from the system for the max-capacity test
+    status = get_status()
+    rated_kw = status.get("rated_power_kw", 110)
+    max_target = int(rated_kw)  # Round down to nearest integer
+    
+    targets = [60, 90, max_target]
     results = {}
     
     print(f"\n{'#'*70}")
