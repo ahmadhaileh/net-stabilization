@@ -191,6 +191,21 @@ function updateStatusDisplay() {
     $('rated-power').textContent = state.status.rated_power_kw.toFixed(1);
     $('total-power').textContent = state.status.active_power_kw.toFixed(1) + ' kW';
 
+    // Dynamic header power label
+    const headerPowerLabel = document.querySelector('.header-stat .stat-label');
+    const headerPowerLabels = document.querySelectorAll('.header-stat .stat-label');
+    headerPowerLabels.forEach(el => {
+        if (el.textContent.includes('Power')) {
+            el.textContent = state.status.power_source === 'meter' ? 'Meter Power' : 'Est. Power';
+        }
+    });
+
+    // Last updated timestamp
+    const lastUpdateEl = $('last-updated');
+    if (lastUpdateEl) {
+        lastUpdateEl.textContent = new Date().toLocaleTimeString();
+    }
+
     // Power source indicator
     const badge = $('power-source-badge');
     if (badge) {
@@ -209,22 +224,30 @@ function updateStatusDisplay() {
     $('power-bar-fill').style.width = `${Math.min(powerPercent, 100)}%`;
     $('power-percent').textContent = `${powerPercent.toFixed(0)}%`;
 
-    // Meter readings display
+    // Meter readings display with color coding
     const meterMiners = $('meter-miners-power');
     const meterPlant = $('meter-plant-power');
     const meterEstimated = $('meter-estimated-power');
     if (meterMiners) {
         if (state.status.measured_power_kw !== null && state.status.measured_power_kw !== undefined) {
             meterMiners.textContent = state.status.measured_power_kw.toFixed(2) + ' kW';
+            meterMiners.classList.add('meter-live');
+            meterMiners.classList.remove('meter-offline');
         } else {
             meterMiners.textContent = '-- kW';
+            meterMiners.classList.add('meter-offline');
+            meterMiners.classList.remove('meter-live');
         }
     }
     if (meterPlant) {
         if (state.status.plant_power_kw !== null && state.status.plant_power_kw !== undefined) {
             meterPlant.textContent = state.status.plant_power_kw.toFixed(2) + ' kW';
+            meterPlant.classList.add('meter-live');
+            meterPlant.classList.remove('meter-offline');
         } else {
             meterPlant.textContent = '-- kW';
+            meterPlant.classList.add('meter-offline');
+            meterPlant.classList.remove('meter-live');
         }
     }
     if (meterEstimated) {
@@ -234,15 +257,31 @@ function updateStatusDisplay() {
     // Update slider max
     $('slider-max').textContent = state.ratedPower.toFixed(1) + ' kW';
 
-    // Target marker
+    // Target marker with ±5% margin lines
     if (state.status.target_power_kw !== null) {
         const targetPercent = (state.status.target_power_kw / state.ratedPower) * 100;
         $('target-marker').style.left = `${Math.min(targetPercent, 100)}%`;
         $('target-marker').style.display = 'block';
         $('ems-target').textContent = state.status.target_power_kw.toFixed(1) + ' kW';
+
+        // Show ±5% margin lines
+        const marginLow = $('margin-low');
+        const marginHigh = $('margin-high');
+        if (marginLow && marginHigh) {
+            const lowPercent = Math.max(targetPercent * 0.95, 0);
+            const highPercent = Math.min(targetPercent * 1.05, 100);
+            marginLow.style.left = `${lowPercent}%`;
+            marginHigh.style.left = `${highPercent}%`;
+            marginLow.style.display = 'block';
+            marginHigh.style.display = 'block';
+        }
     } else {
         $('target-marker').style.display = 'none';
         $('ems-target').textContent = '-- kW';
+        const marginLow = $('margin-low');
+        const marginHigh = $('margin-high');
+        if (marginLow) marginLow.style.display = 'none';
+        if (marginHigh) marginHigh.style.display = 'none';
     }
 
     // EMS status
@@ -378,6 +417,16 @@ function updateTotalHashrate() {
 }
 
 function updateMinersDisplay() {
+    // Sort miners by IP for consistent ordering
+    state.discoveredMiners.sort((a, b) => {
+        const ipA = a.ip.split('.').map(Number);
+        const ipB = b.ip.split('.').map(Number);
+        for (let i = 0; i < 4; i++) {
+            if (ipA[i] !== ipB[i]) return ipA[i] - ipB[i];
+        }
+        return 0;
+    });
+
     if (state.viewMode === 'grid') {
         updateMinersGrid();
     } else if (state.viewMode === 'table') {
@@ -652,10 +701,15 @@ function updateMinersRack() {
     // Calculate totals
     let totalHashrate = 0;
     let totalPower = 0;
+    const RACK_IDLE_POWER_KW = 0.018; // 18W idle draw per unit
     
     state.discoveredMiners.forEach(miner => {
         totalHashrate += parseFloat(miner.hashrate_ghs) || 0;
-        totalPower += miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+        if (miner.is_mining) {
+            totalPower += miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+        } else if (miner.is_online) {
+            totalPower += RACK_IDLE_POWER_KW;
+        }
     });
 
     // Update stats (separate value from label now)

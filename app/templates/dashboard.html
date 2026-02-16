@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Net Stabilization - Mining Fleet Control</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=2">
+  <link rel="stylesheet" href="/static/css/style.css?v=3">
   <!-- Chart.js Date Adapter -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -51,6 +51,10 @@
       <div class="connection-status">
         <span id="status-dot" class="status-dot"></span>
         <span id="connection-status">Connecting...</span>
+      </div>
+      <div class="header-stat last-update-stat">
+        <span class="stat-label">Updated</span>
+        <span class="stat-value" id="last-updated">--</span>
       </div>
     </div>
   </header>
@@ -148,6 +152,8 @@
           <div class="power-bar">
             <div id="power-bar-fill" class="power-bar-fill" style="width: 0%"></div>
             <div id="target-marker" class="target-marker" style="left: 0%; display: none;"></div>
+            <div id="margin-low" class="margin-line margin-low" style="left: 0%; display: none;"></div>
+            <div id="margin-high" class="margin-line margin-high" style="left: 0%; display: none;"></div>
           </div>
           <div class="power-labels">
             <span>0%</span>
@@ -678,6 +684,15 @@
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
 
+  <!-- Footer -->
+  <footer class="app-footer">
+    <span class="footer-brand">TransmitX × Cryptohall24</span>
+    <span class="footer-divider">·</span>
+    <span class="footer-version">Net Stabilization v1.0</span>
+    <span class="footer-divider">·</span>
+    <span class="footer-info">Polling every 3s</span>
+  </footer>
+
   <!-- Scan Modal -->
   <div id="scan-modal" class="modal hidden">
     <div class="modal-content">
@@ -1146,7 +1161,7 @@
     </div>
   </div>
 
-  <script src="/static/js/dashboard.js?v=2"></script>
+  <script src="/static/js/dashboard.js?v=3"></script>
 </body>
 
 </html>
