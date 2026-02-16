@@ -110,7 +110,7 @@ class FleetManager:
         self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
         self._regulation_warmup_seconds: int = 120  # Wait 2 min for miners to boot before regulating
         self._regulation_cooldown_seconds: int = 30  # Default cooldown (trim-down is instant)
-        self._regulation_rampup_cooldown_seconds: int = 90  # Longer cooldown after waking miners
+        self._regulation_rampup_cooldown_seconds: int = 60  # Cooldown after waking miners (boot in ~60s)
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
         self._last_regulation_was_rampup: bool = False  # Track if last adjustment was ramp-up

@@ -27,8 +27,12 @@ def api_post(path, data=None):
         headers={"Content-Type": "application/json"} if body else {},
         method="POST"
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"  API POST {path} failed: {e}")
+        return {"accepted": False, "message": str(e)}
 
 def get_status():
     return api_get("/dashboard/api/status")
