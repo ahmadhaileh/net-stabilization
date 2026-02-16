@@ -48,6 +48,7 @@ class FleetStatus(BaseModel):
     rated_power_kw: float = 0.0
     active_power_kw: float = 0.0
     measured_power_kw: Optional[float] = None  # Physical meter reading (None = unavailable)
+    plant_power_kw: Optional[float] = None  # Plant-level meter reading
     estimated_power_kw: float = 0.0  # Sum from miner reports
     power_source: str = "estimate"  # "meter" or "estimate"
     target_power_kw: Optional[float] = None

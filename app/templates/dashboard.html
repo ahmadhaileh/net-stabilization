@@ -45,7 +45,7 @@
         <span class="stat-value" id="total-hashrate">0 GH/s</span>
       </div>
       <div class="header-stat">
-        <span class="stat-label">Est. Power</span>
+        <span class="stat-label">Meter Power</span>
         <span class="stat-value" id="total-power">0.0 kW</span>
       </div>
       <div class="connection-status">
@@ -153,6 +153,20 @@
             <span>0%</span>
             <span id="power-percent">0%</span>
             <span>100%</span>
+          </div>
+          <div class="meter-readings" id="meter-readings">
+            <div class="meter-row">
+              <span class="meter-label">Meter (miners)</span>
+              <span class="meter-value" id="meter-miners-power">-- kW</span>
+            </div>
+            <div class="meter-row">
+              <span class="meter-label">Meter (plant)</span>
+              <span class="meter-value" id="meter-plant-power">-- kW</span>
+            </div>
+            <div class="meter-row">
+              <span class="meter-label">Miner estimates</span>
+              <span class="meter-value" id="meter-estimated-power">-- kW</span>
+            </div>
           </div>
         </div>
       </section>
@@ -446,7 +460,7 @@
             <line x1="1" y1="14" x2="4" y2="14" />
           </svg> Mining Fleet</h2>
         <div class="view-toggle">
-          <button id="view-grid" class="view-btn active" title="Grid View">
+          <button id="view-grid" class="view-btn" title="Grid View">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="7" height="7" />
               <rect x="14" y="3" width="7" height="7" />
@@ -464,7 +478,7 @@
               <line x1="3" y1="18" x2="3.01" y2="18" />
             </svg>
           </button>
-          <button id="view-rack" class="view-btn" title="Rack View">
+          <button id="view-rack" class="view-btn active" title="Rack View">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="4" y="2" width="16" height="6" rx="1" />
               <rect x="4" y="9" width="16" height="6" rx="1" />
@@ -478,7 +492,7 @@
       </div>
 
       <!-- Grid View -->
-      <div id="miners-grid" class="miners-grid">
+      <div id="miners-grid" class="miners-grid hidden">
         <div class="miner-card placeholder">
           <div class="placeholder-content">
             <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -490,8 +504,8 @@
         </div>
       </div>
 
-      <!-- Rack View (hidden by default) -->
-      <div id="miners-rack" class="miners-rack hidden">
+      <!-- Rack View (default) -->
+      <div id="miners-rack" class="miners-rack">
         <div class="rack-units" id="rack-units">
           <!-- Rack units will be rendered here -->
         </div>

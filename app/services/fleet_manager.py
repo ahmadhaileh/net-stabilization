@@ -730,6 +730,7 @@ class FleetManager:
             online_count, mining_count,
             measured_power_kw=meter_reading.miners_total_power_kw if meter_reading else None,
             estimated_power_kw=estimated_power_kw,
+            plant_power_kw=meter_reading.plant_total_power_kw if meter_reading else None,
         )
     
     async def _update_status_awesomeminer(self) -> FleetStatus:
@@ -778,6 +779,7 @@ class FleetManager:
         mining_count: int,
         measured_power_kw: Optional[float] = None,
         estimated_power_kw: Optional[float] = None,
+        plant_power_kw: Optional[float] = None,
     ) -> FleetStatus:
         """Common status finalization logic."""
         # Determine fleet state and running status
@@ -810,6 +812,7 @@ class FleetManager:
             rated_power_kw=rated_power,
             active_power_kw=round(total_power_kw, 2),
             measured_power_kw=round(measured_power_kw, 2) if measured_power_kw is not None else None,
+            plant_power_kw=round(plant_power_kw, 2) if plant_power_kw is not None else None,
             estimated_power_kw=round(estimated_power_kw, 2) if estimated_power_kw is not None else round(total_power_kw, 2),
             power_source=power_source,
             target_power_kw=self._target_power_kw,

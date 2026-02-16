@@ -209,6 +209,28 @@ function updateStatusDisplay() {
     $('power-bar-fill').style.width = `${Math.min(powerPercent, 100)}%`;
     $('power-percent').textContent = `${powerPercent.toFixed(0)}%`;
 
+    // Meter readings display
+    const meterMiners = $('meter-miners-power');
+    const meterPlant = $('meter-plant-power');
+    const meterEstimated = $('meter-estimated-power');
+    if (meterMiners) {
+        if (state.status.measured_power_kw !== null && state.status.measured_power_kw !== undefined) {
+            meterMiners.textContent = state.status.measured_power_kw.toFixed(2) + ' kW';
+        } else {
+            meterMiners.textContent = '-- kW';
+        }
+    }
+    if (meterPlant) {
+        if (state.status.plant_power_kw !== null && state.status.plant_power_kw !== undefined) {
+            meterPlant.textContent = state.status.plant_power_kw.toFixed(2) + ' kW';
+        } else {
+            meterPlant.textContent = '-- kW';
+        }
+    }
+    if (meterEstimated) {
+        meterEstimated.textContent = (state.status.estimated_power_kw || 0).toFixed(2) + ' kW';
+    }
+
     // Update slider max
     $('slider-max').textContent = state.ratedPower.toFixed(1) + ' kW';
 
@@ -1494,8 +1516,8 @@ function addAnomaly(type, message, minerIp = null) {
     updateAnomalyDisplay();
     saveAnomalies();
 
-    // Show toast for critical
-    if (type === 'critical') {
+    // Show toast for critical (except miner offline — too spammy during testing)
+    if (type === 'critical' && !message.includes('went offline')) {
         showToast(`🚨 ${message}`, 'error');
     }
 }
@@ -1606,10 +1628,8 @@ function runFleetAnomalyDetection() {
     state.discoveredMiners.forEach((miner) => {
         if (!miner.is_online) {
             // Offline miner detection
-            const recentOffline = anomalies.find((a) => a.minerIp === miner.ip && a.message.includes('went offline') && now - new Date(a.timestamp).getTime() < 300000);
-            if (!recentOffline) {
-                addAnomaly('critical', `Miner went offline`, miner.ip);
-            }
+            // Miner offline tracking (silent — no toast/anomaly spam during testing)
+            // Offline miners are still visible in the dashboard with their status
         } else {
             onlineCount++;
             const temp = miner.temperature_c || miner.temp_chip || 0;
