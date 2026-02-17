@@ -65,7 +65,7 @@ def run_test(target_kw, test_num):
     first_in_margin_time = None
     peak_power = 0
     
-    print(f"\n  {'Time':>6}  {'Elapsed':>8}  {'Plant kW':>9}  {'Miner kW':>9}  {'Mining':>7}  {'Dev%':>6}  Status")
+    print(f"\n  {'Time':>6}  {'Elapsed':>8}  {'Miner kW':>9}  {'Plant kW':>9}  {'Mining':>7}  {'Dev%':>6}  Status")
     print(f"  {'-'*6}  {'-'*8}  {'-'*9}  {'-'*9}  {'-'*7}  {'-'*6}  {'-'*10}")
     
     while True:
@@ -77,8 +77,8 @@ def run_test(target_kw, test_num):
         
         try:
             status = get_status()
-            actual = status.get("active_power_kw", 0)  # plant power (regulation target)
-            miners_kw = status.get("measured_power_kw", 0)
+            actual = status.get("active_power_kw", 0)  # miner power (regulation target)
+            plant_kw = status.get("plant_power_kw", 0)
             estimated = status.get("estimated_power_kw", 0)
             mining = status["mining_miners"]
             total = status["total_miners"]
@@ -95,7 +95,7 @@ def run_test(target_kw, test_num):
             in_margin = within_margin(actual, target_kw, MARGIN_PERCENT)
             marker = " ✓ IN MARGIN" if in_margin else ""
             
-            print(f"  {datetime.now().strftime('%H:%M:%S'):>6}  {elapsed:>7.0f}s  {actual:>8.2f}  {miners_kw:>8.2f}  {mining:>3}/{total:<3}  {dev_pct:>+5.1f}%  {state}{marker}")
+            print(f"  {datetime.now().strftime('%H:%M:%S'):>6}  {elapsed:>7.0f}s  {actual:>8.2f}  {plant_kw:>8.2f}  {mining:>3}/{total:<3}  {dev_pct:>+5.1f}%  {state}{marker}")
             
             if in_margin and first_in_margin_time is None:
                 first_in_margin_time = elapsed

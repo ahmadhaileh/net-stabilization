@@ -723,9 +723,9 @@ class FleetManager:
                     estimated_power_kw += IDLE_POWER_KW
         
         # ── Power meter calibration ──────────────────────────────────
-        # Use PLANT total power for regulation (not just miners).
-        # The EMS cares about total plant consumption — that's the
-        # defining output that must hit the target ±5% margin.
+        # Use MINER power for regulation (not plant total).
+        # The EMS target refers to miner consumption only — they
+        # monitor plant-level limits on their side.
         # The meter gives ground-truth; miner reports can be wrong when
         # miners lose connection but keep running.
         total_power_kw = estimated_power_kw  # default: use estimate
@@ -733,12 +733,12 @@ class FleetManager:
         if self.power_meter:
             meter_reading = await self.power_meter.get_power()
             if meter_reading is not None:
-                total_power_kw = meter_reading.plant_total_power_kw
+                total_power_kw = meter_reading.miners_total_power_kw
                 if abs(total_power_kw - estimated_power_kw) > 5.0:
                     logger.info(
                         "Power meter vs estimate divergence",
-                        plant_kw=round(total_power_kw, 2),
-                        miners_kw=round(meter_reading.miners_total_power_kw, 2),
+                        meter_kw=round(total_power_kw, 2),
+                        plant_kw=round(meter_reading.plant_total_power_kw, 2),
                         estimated_kw=round(estimated_power_kw, 2),
                     )
                 
@@ -834,7 +834,7 @@ class FleetManager:
         )
         
         # Use override rated power if configured.
-        # Otherwise use meter-calibrated values (actual per-miner power × fleet size + plant overhead).
+        # Otherwise use meter-calibrated per-miner power × fleet size.
         # This is critical: miner self-reports (~1.4 kW) overstate actual consumption (~1.2 kW),
         # causing the system to advertise capacity it can never deliver.
         if self._config.rated_power_kw_override is not None:
@@ -844,10 +844,10 @@ class FleetManager:
         else:
             # Use meter-calibrated values (or initial defaults based on real measurements).
             # Miner self-reports (~1.4 kW each → 121.8 kW fleet) overstate actual capacity
-            # (~1.2 kW each → ~110 kW fleet). The defaults are pre-loaded from test data
+            # (~1.2 kW each → ~104 kW fleet). The defaults are pre-loaded from test data
             # and get refined by EMA once miners start running.
             total_miner_count = len(miner_states)
-            rated_power = (self._actual_per_miner_kw * total_miner_count) + self._plant_overhead_kw
+            rated_power = self._actual_per_miner_kw * total_miner_count
         
         # Check availability for dispatch
         is_available = (
@@ -1124,7 +1124,7 @@ class FleetManager:
         if max_possible_miners == 0:
             return False, "No controllable miners available for activation"
 
-        max_possible_kw = (max_possible_miners * per_miner_kw) + self._plant_overhead_kw
+        max_possible_kw = max_possible_miners * per_miner_kw
         if target_power_kw > max_possible_kw:
             logger.warning(
                 "Target exceeds rated capacity, clamping locally",
@@ -1138,14 +1138,12 @@ class FleetManager:
             # The stored target should only be set by activate() / EMS commands.
             # Clamping is local to this call to prevent over-wake.
 
-        # Subtract plant overhead from target — we're regulating plant power,
-        # but only miners are controllable. The overhead is always present.
-        miner_target_kw = max(0, target_power_kw - self._plant_overhead_kw)
-        miner_target_watts = miner_target_kw * 1000
-        miners_needed = int(miner_target_watts / per_miner_watts)
+        # Target is miner power directly — no plant overhead subtraction needed.
+        target_watts = target_power_kw * 1000
+        miners_needed = int(target_watts / per_miner_watts)
 
         # Add one more if there's significant remainder (> 30% of a miner)
-        remainder = miner_target_watts - (miners_needed * per_miner_watts)
+        remainder = target_watts - (miners_needed * per_miner_watts)
         if remainder > (per_miner_watts * 0.3):
             miners_needed += 1
 
@@ -1255,8 +1253,8 @@ class FleetManager:
         
         self._status.state = FleetState.RUNNING
         
-        estimated_plant_kw = (active_count * per_miner_kw) + self._plant_overhead_kw
-        return True, f"Target: {target_power_kw:.2f}kW, Est: {estimated_plant_kw:.2f}kW ({active_count} miners, {success_count} commands sent)"
+        estimated_miner_kw = active_count * per_miner_kw
+        return True, f"Target: {target_power_kw:.2f}kW, Est: {estimated_miner_kw:.2f}kW ({active_count} miners, {success_count} commands sent)"
     
     async def _activate_fleet_frequency_mode(
         self,
