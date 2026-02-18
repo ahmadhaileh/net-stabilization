@@ -145,7 +145,32 @@ class DashboardSettings(Base):
 def init_db():
     """Initialize the database and create tables."""
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
     logger.info("Database initialized", path=DATABASE_URL)
+
+
+def _run_migrations():
+    """Add missing columns to existing tables (safe ALTER TABLE IF NOT EXISTS)."""
+    migrations = [
+        # (table, column, type)
+        ("fleet_snapshots", "measured_power_kw", "REAL"),
+        ("fleet_snapshots", "plant_power_kw", "REAL"),
+        ("fleet_snapshots", "voltage", "REAL"),
+        ("fleet_snapshots", "target_power_kw", "REAL"),
+    ]
+    with engine.connect() as conn:
+        for table, column, col_type in migrations:
+            try:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                    )
+                )
+                conn.commit()
+                logger.info("Migration: added column", table=table, column=column)
+            except Exception:
+                # Column already exists — ignore
+                conn.rollback()
 
 
 @contextmanager
