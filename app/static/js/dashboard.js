@@ -2302,8 +2302,9 @@ function updateGraphCurrentValues() {
 }
 
 function saveHistory() {
+    // History is now persisted server-side in SQLite.
+    // localStorage save kept as secondary fallback for offline use.
     try {
-        // Only save last 24 hours to localStorage (to keep it manageable)
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
         const toSave = {
             hashrate: historyData.hashrate.filter((p) => p.x.getTime() > cutoff),
@@ -2317,6 +2318,7 @@ function saveHistory() {
 }
 
 function loadHistory() {
+    // Try loading from localStorage first (instant, offline fallback)
     try {
         const saved = localStorage.getItem('grid-stabilization-history');
         if (saved) {
@@ -2327,6 +2329,70 @@ function loadHistory() {
         }
     } catch (e) {
         console.warn('Could not load history from localStorage');
+    }
+    
+    // Then load from server DB (persistent across restarts/VPN disconnects)
+    loadHistoryFromServer();
+}
+
+async function loadHistoryFromServer() {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/fleet-snapshots?hours=24&limit=1440`);
+        if (!response.ok) return;
+        const data = await response.json();
+        const snapshots = data.snapshots || [];
+        if (snapshots.length === 0) return;
+        
+        console.log(`Loading ${snapshots.length} fleet snapshots from server DB`);
+        
+        // Build fleet history from server snapshots
+        const serverHashrate = [];
+        const serverPower = [];
+        const serverTemp = [];
+        
+        snapshots.forEach((s) => {
+            const t = new Date(s.timestamp);
+            
+            // Hashrate: stored as GH/s in DB, display as TH/s
+            if (s.total_hashrate_ghs != null) {
+                serverHashrate.push({ x: t, y: s.total_hashrate_ghs / 1000 });
+            }
+            
+            // Power: use measured_power_kw (meter) if available, else convert total_power_watts
+            if (s.measured_power_kw != null) {
+                serverPower.push({ x: t, y: s.measured_power_kw });
+            } else if (s.total_power_watts != null) {
+                serverPower.push({ x: t, y: s.total_power_watts / 1000 });
+            }
+            
+            // Temperature
+            if (s.avg_temperature != null) {
+                serverTemp.push({ x: t, y: s.avg_temperature });
+            }
+        });
+        
+        // Merge: server data first, then any newer in-memory points
+        // Find newest server timestamp to avoid duplicates
+        const newestServerTime = serverHashrate.length > 0 
+            ? serverHashrate[serverHashrate.length - 1].x.getTime() 
+            : 0;
+        
+        // Keep only in-memory points that are newer than server data
+        const memHashrate = historyData.hashrate.filter((p) => p.x.getTime() > newestServerTime);
+        const memPower = historyData.power.filter((p) => p.x.getTime() > newestServerTime);
+        const memTemp = historyData.temp.filter((p) => p.x.getTime() > newestServerTime);
+        
+        historyData.hashrate = [...serverHashrate, ...memHashrate];
+        historyData.power = [...serverPower, ...memPower];
+        historyData.temp = [...serverTemp, ...memTemp];
+        
+        console.log(`Fleet history loaded: ${historyData.hashrate.length} hashrate, ${historyData.power.length} power, ${historyData.temp.length} temp points`);
+        
+        // Re-select time scope and update charts
+        autoSelectTimeScope();
+        updateCharts();
+    } catch (e) {
+        console.warn('Could not load fleet history from server:', e);
     }
 }
 
@@ -2371,6 +2437,7 @@ function updateModalChartsWithScope() {
         '15m': 15 * 60 * 1000,
         '1h': 60 * 60 * 1000,
         '6h': 6 * 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000,
     };
 
     const now = Date.now();
@@ -2420,39 +2487,31 @@ async function openMinerModal(minerIp) {
     const cachedDetails = state.minerDetailsCache[minerIp];
     currentMinerDetails = cachedDetails || null;
 
-    // Load historical data from the global history storage if available
+    // Reset chart data — will be populated from server + in-memory
+    modalChartData = {
+        hashrate: [],
+        temp: [],
+        power: [],
+        timestamps: [],
+        fullData: { hashrate: [], temp: [], power: [] },
+    };
+
+    // Load historical data from the global in-memory history if available
     const existingHistory = historyData.miners[minerIp];
     if (existingHistory) {
-        // Copy existing historical data into modal chart data
-        // Convert Date objects to timestamps for consistent filtering
-        modalChartData = {
-            hashrate: [],
-            temp: [],
-            power: [],
-            timestamps: [],
-            fullData: {
-                hashrate: existingHistory.hashrate.map(p => ({ 
-                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
-                    y: p.y 
-                })),
-                temp: existingHistory.temp.map(p => ({ 
-                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
-                    y: p.y 
-                })),
-                power: existingHistory.power.map(p => ({ 
-                    x: p.x instanceof Date ? p.x.getTime() : p.x, 
-                    y: p.y * 1000 // Convert kW to W for modal display
-                })),
-            },
-        };
-    } else {
-        // Reset chart data if no history exists
-        modalChartData = {
-            hashrate: [],
-            temp: [],
-            power: [],
-            timestamps: [],
-            fullData: { hashrate: [], temp: [], power: [] },
+        modalChartData.fullData = {
+            hashrate: existingHistory.hashrate.map(p => ({ 
+                x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                y: p.y 
+            })),
+            temp: existingHistory.temp.map(p => ({ 
+                x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                y: p.y 
+            })),
+            power: existingHistory.power.map(p => ({ 
+                x: p.x instanceof Date ? p.x.getTime() : p.x, 
+                y: p.y * 1000 // Convert kW to W for modal display
+            })),
         };
     }
 
@@ -2481,6 +2540,9 @@ async function openMinerModal(minerIp) {
     // Show modal
     $('miner-modal').classList.add('active');
 
+    // Load historical miner data from server DB (persisted across restarts)
+    loadMinerHistoryFromServer(minerIp);
+
     // Fetch fresh detailed data from API in background to update cache
     try {
         const details = await fetchMinerDetails(miner.ip);
@@ -2496,6 +2558,69 @@ async function openMinerModal(minerIp) {
     // Auto-load chip hashrate data for Vnish firmware
     if (miner.firmware_type === 'vnish' || !miner.firmware_type) {
         loadChipHashrateAuto(miner.ip);
+    }
+}
+
+async function loadMinerHistoryFromServer(minerIp) {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/miner-snapshots/${minerIp}?hours=24&limit=1440`);
+        if (!response.ok) return;
+        const data = await response.json();
+        const snapshots = data.snapshots || [];
+        if (snapshots.length === 0) return;
+        
+        console.log(`Loading ${snapshots.length} miner snapshots for ${minerIp} from server DB`);
+        
+        // Build history from server snapshots
+        const serverHashrate = [];
+        const serverTemp = [];
+        const serverPower = [];
+        
+        snapshots.forEach((s) => {
+            const t = new Date(s.timestamp).getTime();
+            
+            if (s.hashrate_ghs != null) {
+                serverHashrate.push({ x: t, y: s.hashrate_ghs / 1000 }); // TH/s
+            }
+            if (s.temperature != null) {
+                serverTemp.push({ x: t, y: s.temperature });
+            }
+            if (s.power_watts != null) {
+                serverPower.push({ x: t, y: s.power_watts }); // Modal uses watts
+            }
+        });
+        
+        // Merge: server data + any newer in-memory points
+        const newestServerTime = serverHashrate.length > 0 
+            ? serverHashrate[serverHashrate.length - 1].x 
+            : 0;
+        
+        const memHashrate = modalChartData.fullData.hashrate.filter((p) => p.x > newestServerTime);
+        const memTemp = modalChartData.fullData.temp.filter((p) => p.x > newestServerTime);
+        const memPower = modalChartData.fullData.power.filter((p) => p.x > newestServerTime);
+        
+        modalChartData.fullData.hashrate = [...serverHashrate, ...memHashrate];
+        modalChartData.fullData.temp = [...serverTemp, ...memTemp];
+        modalChartData.fullData.power = [...serverPower, ...memPower];
+        
+        // Auto-select best scope based on data age
+        if (modalChartData.fullData.hashrate.length > 0) {
+            const oldestTime = modalChartData.fullData.hashrate[0].x;
+            const dataAge = Date.now() - oldestTime;
+            if (dataAge > 6 * 60 * 60 * 1000) {
+                setModalTimeScope('24h');
+            } else if (dataAge > 60 * 60 * 1000) {
+                setModalTimeScope('6h');
+            } else if (dataAge > 15 * 60 * 1000) {
+                setModalTimeScope('1h');
+            } else {
+                setModalTimeScope('5m');
+            }
+        }
+        
+        updateModalChartsWithScope();
+    } catch (e) {
+        console.warn('Could not load miner history from server:', e);
     }
 }
 

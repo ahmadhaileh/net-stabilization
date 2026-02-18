@@ -405,6 +405,78 @@ async def get_history(limit: int = 100):
 
 
 # =========================================================================
+# Snapshot Endpoints (historical data from DB)
+# =========================================================================
+
+@router.get(
+    "/fleet-snapshots",
+    summary="Get historical fleet snapshots from database"
+)
+async def get_fleet_snapshots(hours: int = 24, limit: int = 1440):
+    """
+    Return fleet-level snapshots stored in SQLite.
+    
+    Default: last 24 hours, max 1440 points (1 per minute).
+    Data persists across container restarts and VPN disconnects.
+    """
+    from app.database import get_db_service
+    db = get_db_service()
+    snapshots = db.get_fleet_snapshots(hours=hours, limit=limit)
+    
+    return {
+        "snapshots": [
+            {
+                "timestamp": s.timestamp.isoformat(),
+                "total_hashrate_ghs": s.total_hashrate_ghs,
+                "total_power_watts": s.total_power_watts,
+                "avg_temperature": s.avg_temperature,
+                "miners_online": s.miners_online,
+                "miners_mining": s.miners_mining,
+                "miners_total": s.miners_total,
+                "fleet_state": s.fleet_state,
+                "measured_power_kw": s.measured_power_kw,
+                "plant_power_kw": s.plant_power_kw,
+                "voltage": s.voltage,
+                "target_power_kw": s.target_power_kw,
+            }
+            for s in reversed(snapshots)  # oldest first for charts
+        ]
+    }
+
+
+@router.get(
+    "/miner-snapshots/{miner_ip}",
+    summary="Get historical miner snapshots from database"
+)
+async def get_miner_snapshots(miner_ip: str, hours: int = 24, limit: int = 1440):
+    """
+    Return per-miner snapshots stored in SQLite.
+    
+    Default: last 24 hours, max 1440 points (1 per minute).
+    Data persists across container restarts and VPN disconnects.
+    """
+    from app.database import get_db_service
+    db = get_db_service()
+    snapshots = db.get_miner_snapshots(miner_ip=miner_ip, hours=hours, limit=limit)
+    
+    return {
+        "miner_ip": miner_ip,
+        "snapshots": [
+            {
+                "timestamp": s.timestamp.isoformat(),
+                "hashrate_ghs": s.hashrate_ghs,
+                "power_watts": s.power_watts,
+                "temperature": s.temperature,
+                "fan_speed": s.fan_speed,
+                "frequency": s.frequency,
+                "is_mining": s.is_mining,
+            }
+            for s in reversed(snapshots)  # oldest first for charts
+        ]
+    }
+
+
+# =========================================================================
 # Health Check
 # =========================================================================
 
