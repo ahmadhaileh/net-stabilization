@@ -255,10 +255,10 @@ function updateStatusDisplay() {
     if (meterVoltage) {
         if (state.status.voltage !== null && state.status.voltage !== undefined) {
             meterVoltage.textContent = state.status.voltage.toFixed(1) + ' V';
-            if (state.status.voltage < 1.0) {
+            if (state.status.voltage < 100.0) {
                 meterVoltage.classList.add('meter-danger');
                 meterVoltage.classList.remove('meter-live', 'meter-offline');
-                meterVoltage.title = 'POWER LOSS — container has no voltage';
+                meterVoltage.title = 'POWER LOSS — container voltage below safe threshold';
             } else {
                 meterVoltage.classList.add('meter-live');
                 meterVoltage.classList.remove('meter-offline', 'meter-danger');

@@ -859,22 +859,26 @@ class FleetManager:
                 )
         
         # ── Voltage-based power-loss safety ──────────────────────────
-        # If the meter reports voltage ≈ 0, the mining container lost power.
-        # When voltage is restored the miners may reboot into an uncontrolled
-        # hashing state.  We detect the 0→restored transition and force-idle
-        # the entire fleet so the EMS stays in control.
+        # The meter voltage is the arithmetic average of L1-N, L2-N, L3-N.
+        # Normal ≈ 230 V.  If 2 of 3 phases drop → avg ≈ 77 V.  Full
+        # blackout → 0 V.  We use 100 V as the threshold to catch both
+        # full outages and multi-phase failures.
+        # When voltage is restored the miners may reboot into an
+        # uncontrolled hashing state → force-idle the entire fleet.
+        _VOLTAGE_LOSS_THRESHOLD = 100.0  # V  (below this = power loss)
         voltage = meter_reading.voltage if meter_reading else None
         if voltage is not None:
-            if voltage < 1.0:
-                # Container has no power
+            if voltage < _VOLTAGE_LOSS_THRESHOLD:
+                # Container has lost power (full or multi-phase)
                 if not self._power_loss_detected:
                     self._power_loss_detected = True
                     logger.warning(
-                        "POWER LOSS DETECTED — container voltage is 0",
-                        voltage=voltage,
+                        "POWER LOSS DETECTED — container voltage below threshold",
+                        voltage=round(voltage, 1),
+                        threshold=_VOLTAGE_LOSS_THRESHOLD,
                     )
             else:
-                # Voltage is present
+                # Voltage is healthy
                 if self._power_loss_detected:
                     # Transition from power-loss → restored
                     self._power_loss_detected = False
