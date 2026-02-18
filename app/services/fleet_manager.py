@@ -286,9 +286,12 @@ class FleetManager:
         online_count: int,
         mining_count: int,
         miner_count: int,
-        fleet_state: FleetState
+        fleet_state: FleetState,
+        measured_power_kw: Optional[float] = None,
+        plant_power_kw: Optional[float] = None,
+        voltage: Optional[float] = None,
     ):
-        """Save fleet snapshot with time-based throttling."""
+        """Save fleet + per-miner snapshots with time-based throttling."""
         now = datetime.utcnow()
         
         # Check if enough time has passed
@@ -298,17 +301,52 @@ class FleetManager:
                 return  # Skip this snapshot
         
         try:
+            # ── Aggregate per-miner metrics ──────────────────────────
+            total_hashrate_ghs = 0.0
+            temperatures = []
+            miner_snapshots = []
+
+            if self._use_direct_mode and self.discovery:
+                for miner in self.discovery.miners:
+                    if miner.is_online:
+                        total_hashrate_ghs += miner.hashrate_ghs
+                        if miner.temperature_c > 0:
+                            temperatures.append(miner.temperature_c)
+                        # Collect per-miner snapshot data
+                        miner_snapshots.append({
+                            "miner_ip": miner.ip,
+                            "hashrate_ghs": miner.hashrate_ghs,
+                            "power_watts": miner.power_kw * 1000 if miner.power_kw else None,
+                            "temperature": miner.temperature_c if miner.temperature_c > 0 else None,
+                            "fan_speed": int(miner.fan_speed_pct) if miner.fan_speed_pct > 0 else None,
+                            "frequency": miner.current_frequency,
+                            "is_mining": miner.is_mining,
+                        })
+
+            avg_temp = sum(temperatures) / len(temperatures) if temperatures else None
+
+            # ── Save fleet snapshot ──────────────────────────────────
             self.db.save_fleet_snapshot(
-                total_hashrate_ghs=0,  # Would need to aggregate from miners
+                total_hashrate_ghs=total_hashrate_ghs,
                 total_power_watts=total_power_kw * 1000,
+                avg_temperature=avg_temp,
                 miners_online=online_count,
                 miners_mining=mining_count,
                 miners_total=miner_count,
-                fleet_state=fleet_state.value
+                fleet_state=fleet_state.value,
+                measured_power_kw=measured_power_kw,
+                plant_power_kw=plant_power_kw,
+                voltage=voltage,
+                target_power_kw=self._target_power_kw,
             )
+
+            # ── Save per-miner snapshots ─────────────────────────────
+            if miner_snapshots:
+                self.db.save_miner_snapshots_batch(miner_snapshots)
+
             self._last_fleet_snapshot_time = now
         except Exception as e:
-            logger.debug("Failed to save fleet snapshot", error=str(e))
+            logger.debug("Failed to save snapshots", error=str(e))
     
     async def stop_polling(self):
         """Stop background status polling and discovery."""
@@ -968,7 +1006,10 @@ class FleetManager:
             online_count=online_count,
             mining_count=mining_count,
             miner_count=len(miner_states),
-            fleet_state=fleet_state
+            fleet_state=fleet_state,
+            measured_power_kw=round(measured_power_kw, 2) if measured_power_kw is not None else None,
+            plant_power_kw=round(plant_power_kw, 2) if plant_power_kw is not None else None,
+            voltage=round(voltage, 1) if voltage is not None else None,
         )
         
         logger.debug(

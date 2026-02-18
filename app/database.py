@@ -105,6 +105,11 @@ class FleetSnapshot(Base):
     miners_mining = Column(Integer, default=0)
     miners_total = Column(Integer, default=0)
     fleet_state = Column(String(20), nullable=True)
+    # Meter and EMS fields (added 2026-02-18)
+    measured_power_kw = Column(Float, nullable=True)
+    plant_power_kw = Column(Float, nullable=True)
+    voltage = Column(Float, nullable=True)
+    target_power_kw = Column(Float, nullable=True)
 
 
 class CommandHistory(Base):
@@ -292,6 +297,15 @@ class DatabaseService:
         with get_db() as db:
             snapshot = MinerSnapshot(miner_ip=miner_ip, **data)
             db.add(snapshot)
+            db.commit()
+    
+    def save_miner_snapshots_batch(self, snapshots: List[Dict[str, Any]]):
+        """Save multiple miner snapshots in a single transaction."""
+        if not snapshots:
+            return
+        with get_db() as db:
+            for snap_data in snapshots:
+                db.add(MinerSnapshot(**snap_data))
             db.commit()
     
     def save_fleet_snapshot(self, **data):
