@@ -131,6 +131,13 @@ class FleetManager:
         self._plant_overhead_kw: float = 6.0     # Non-miner plant consumption (cooling, network, etc.)
         self._meter_calibration_count: int = 0    # How many meter samples we've collected
 
+        # Voltage-based power-loss safety
+        # When the meter reports voltage=0 the mining container has lost power.
+        # On power restore the miners may reboot into a hashing state while the
+        # EMS has not yet sent an activation command → idle everything.
+        self._last_voltage: Optional[float] = None   # Last known voltage from meter
+        self._power_loss_detected: bool = False       # True while voltage is 0
+
         # Snapshot throttling
         self._last_fleet_snapshot_time: Optional[datetime] = None
         self._snapshot_interval = self.settings.snapshot_interval_seconds
@@ -235,6 +242,43 @@ class FleetManager:
         self._target_power_kw = None
         
         return True, f"Sent idle command to {success_count}/{len(all_miners)} miners (failed: {fail_count})"
+    
+    async def _safe_idle_after_power_restore(self):
+        """
+        Idle the entire fleet after a power-loss → restore transition.
+
+        Called as a fire-and-forget task from the status polling loop.
+        We wait a short period so miners have time to come back online
+        before we try to contact them, then idle every miner we can reach.
+        Runs up to 3 rounds (with delays) to catch stragglers that boot
+        slowly after a power outage.
+        """
+        try:
+            for attempt in range(1, 4):
+                # Give miners time to finish booting
+                wait_secs = 30 * attempt  # 30s, 60s, 90s
+                logger.info(
+                    "Power-restore idle: waiting for miners to boot",
+                    attempt=attempt,
+                    wait_seconds=wait_secs,
+                )
+                await asyncio.sleep(wait_secs)
+
+                # Re-discover miners that are now reachable
+                if self.discovery:
+                    await self.discovery.scan_network()
+
+                ok, msg = await self.idle_all_miners()
+                logger.info(
+                    "Power-restore idle attempt",
+                    attempt=attempt,
+                    success=ok,
+                    message=msg,
+                )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Power-restore idle failed", error=str(e))
     
     def _save_fleet_snapshot_throttled(
         self,
@@ -358,6 +402,11 @@ class FleetManager:
                 # CRITICAL: Skip if deactivation is in progress
                 if self._deactivation_in_progress:
                     logger.debug("Regulation skipped - deactivation in progress")
+                    continue
+                
+                # SAFETY: Skip regulation while container power is lost
+                if self._power_loss_detected:
+                    logger.debug("Regulation skipped - container power loss detected")
                     continue
                 
                 # Skip if no active target power
@@ -771,12 +820,44 @@ class FleetManager:
                     estimated_kw=round(estimated_power_kw, 2),
                 )
         
+        # ── Voltage-based power-loss safety ──────────────────────────
+        # If the meter reports voltage ≈ 0, the mining container lost power.
+        # When voltage is restored the miners may reboot into an uncontrolled
+        # hashing state.  We detect the 0→restored transition and force-idle
+        # the entire fleet so the EMS stays in control.
+        voltage = meter_reading.voltage if meter_reading else None
+        if voltage is not None:
+            if voltage < 1.0:
+                # Container has no power
+                if not self._power_loss_detected:
+                    self._power_loss_detected = True
+                    logger.warning(
+                        "POWER LOSS DETECTED — container voltage is 0",
+                        voltage=voltage,
+                    )
+            else:
+                # Voltage is present
+                if self._power_loss_detected:
+                    # Transition from power-loss → restored
+                    self._power_loss_detected = False
+                    logger.warning(
+                        "POWER RESTORED — idling entire fleet for safety",
+                        voltage=round(voltage, 1),
+                        previous_voltage=self._last_voltage,
+                    )
+                    # Force idle: clear any EMS target and idle all miners
+                    self._target_power_kw = None
+                    self._status.state = FleetState.STANDBY
+                    asyncio.create_task(self._safe_idle_after_power_restore())
+            self._last_voltage = voltage
+        
         return self._finalize_status(
             miner_states, total_power_kw, total_rated_kw,
             online_count, mining_count,
             measured_power_kw=meter_reading.miners_total_power_kw if meter_reading else None,
             estimated_power_kw=estimated_power_kw,
             plant_power_kw=meter_reading.plant_total_power_kw if meter_reading else None,
+            voltage=voltage,
         )
     
     async def _update_status_awesomeminer(self) -> FleetStatus:
@@ -826,6 +907,7 @@ class FleetManager:
         measured_power_kw: Optional[float] = None,
         estimated_power_kw: Optional[float] = None,
         plant_power_kw: Optional[float] = None,
+        voltage: Optional[float] = None,
     ) -> FleetStatus:
         """Common status finalization logic."""
         # Determine fleet state and running status
@@ -868,6 +950,7 @@ class FleetManager:
             measured_power_kw=round(measured_power_kw, 2) if measured_power_kw is not None else None,
             plant_power_kw=round(plant_power_kw, 2) if plant_power_kw is not None else None,
             estimated_power_kw=round(estimated_power_kw, 2) if estimated_power_kw is not None else round(total_power_kw, 2),
+            voltage=round(voltage, 1) if voltage is not None else None,
             power_source=power_source,
             target_power_kw=self._target_power_kw,
             total_miners=len(miner_states),
@@ -967,6 +1050,10 @@ class FleetManager:
             
             # Clear deactivation flag
             self._deactivation_in_progress = False
+            
+            # SAFETY: Reject activation while container has no power
+            if self._power_loss_detected:
+                return False, "Container power loss detected — activation blocked for safety."
             
             # Validate request
             if target_power_kw < 0:

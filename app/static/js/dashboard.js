@@ -250,6 +250,26 @@ function updateStatusDisplay() {
             meterPlant.classList.remove('meter-live');
         }
     }
+    // Voltage display with power-loss warning
+    const meterVoltage = $('meter-voltage');
+    if (meterVoltage) {
+        if (state.status.voltage !== null && state.status.voltage !== undefined) {
+            meterVoltage.textContent = state.status.voltage.toFixed(1) + ' V';
+            if (state.status.voltage < 1.0) {
+                meterVoltage.classList.add('meter-danger');
+                meterVoltage.classList.remove('meter-live', 'meter-offline');
+                meterVoltage.title = 'POWER LOSS — container has no voltage';
+            } else {
+                meterVoltage.classList.add('meter-live');
+                meterVoltage.classList.remove('meter-offline', 'meter-danger');
+                meterVoltage.title = '';
+            }
+        } else {
+            meterVoltage.textContent = '-- V';
+            meterVoltage.classList.add('meter-offline');
+            meterVoltage.classList.remove('meter-live', 'meter-danger');
+        }
+    }
     if (meterEstimated) {
         meterEstimated.textContent = (state.status.estimated_power_kw || 0).toFixed(2) + ' kW';
     }

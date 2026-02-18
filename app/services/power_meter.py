@@ -5,8 +5,12 @@ This provides ground-truth power readings from a physical meter installed
 at the plant, replacing the estimated sums from individual miner reports
 which can be inaccurate when miners lose connection.
 
-API: GET http://<host>:<port>/api/miners/get-actual-power
-Response: { "minersTotalPower": <kW>, "plantTotalPower": <kW> }
+API: GET http://<host>:<port>/api/miners/get-measurement-data
+Response: { "minersTotalPower": <kW>, "plantTotalPower": <kW>, "voltage": <V> }
+
+The voltage field is critical for safety: voltage == 0 means the mining
+container has lost power. When power is restored the server must idle
+the entire fleet because miners may have rebooted into a hashing state.
 """
 import asyncio
 from datetime import datetime
@@ -22,11 +26,12 @@ logger = structlog.get_logger()
 
 class PowerMeterReading:
     """A single reading from the power meter."""
-    __slots__ = ("miners_total_power_kw", "plant_total_power_kw", "timestamp")
+    __slots__ = ("miners_total_power_kw", "plant_total_power_kw", "voltage", "timestamp")
 
-    def __init__(self, miners_total_power_kw: float, plant_total_power_kw: float):
+    def __init__(self, miners_total_power_kw: float, plant_total_power_kw: float, voltage: float = 0.0):
         self.miners_total_power_kw = miners_total_power_kw
         self.plant_total_power_kw = plant_total_power_kw
+        self.voltage = voltage
         self.timestamp = datetime.utcnow()
 
 
@@ -44,7 +49,7 @@ class PowerMeterService:
         self._base_url = (
             f"http://{self.settings.power_meter_host}:{self.settings.power_meter_port}"
         )
-        self._endpoint = f"{self._base_url}/api/miners/get-actual-power"
+        self._endpoint = f"{self._base_url}/api/miners/get-measurement-data"
         self._timeout = self.settings.power_meter_timeout
         self._last_reading: Optional[PowerMeterReading] = None
         self._consecutive_failures: int = 0
@@ -81,8 +86,9 @@ class PowerMeterService:
 
             miners_kw = float(data["minersTotalPower"])
             plant_kw = float(data["plantTotalPower"])
+            voltage = float(data.get("voltage", 0.0))
 
-            reading = PowerMeterReading(miners_kw, plant_kw)
+            reading = PowerMeterReading(miners_kw, plant_kw, voltage)
             self._last_reading = reading
             self._consecutive_failures = 0
 
@@ -90,6 +96,7 @@ class PowerMeterService:
                 "Power meter reading",
                 miners_kw=round(miners_kw, 2),
                 plant_kw=round(plant_kw, 2),
+                voltage=round(voltage, 1),
             )
             return reading
 

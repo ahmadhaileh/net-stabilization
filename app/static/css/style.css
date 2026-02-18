@@ -749,6 +749,17 @@ svg.icon {
     color: var(--text-tertiary);
 }
 
+.meter-value.meter-danger {
+    color: #ef4444;
+    font-weight: 600;
+    animation: pulse-danger 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-danger {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .power-bar {
     height: 6px;
     background: var(--bg-input);

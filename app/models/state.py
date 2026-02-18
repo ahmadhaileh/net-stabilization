@@ -50,6 +50,7 @@ class FleetStatus(BaseModel):
     measured_power_kw: Optional[float] = None  # Physical meter reading (None = unavailable)
     plant_power_kw: Optional[float] = None  # Plant-level meter reading
     estimated_power_kw: float = 0.0  # Sum from miner reports
+    voltage: Optional[float] = None  # Miner container voltage (0 = power loss)
     power_source: str = "estimate"  # "meter" or "estimate"
     target_power_kw: Optional[float] = None
     
