@@ -1278,6 +1278,45 @@ async def get_discovered_miners():
 
 
 # =========================================================================
+# Suspicious / Clamped Miners Endpoint
+# =========================================================================
+
+@router.get(
+    "/suspicious-miners",
+    summary="List miners that report unrealistic values"
+)
+async def get_suspicious_miners():
+    """
+    Return a list of miners whose reported power or hashrate was
+    clamped because it exceeded the sanity threshold (1500 W / 15 TH).
+    Useful for identifying hardware with corrupt firmware readings.
+    """
+    fleet_manager = get_fleet_manager()
+    discovery = fleet_manager.discovery
+
+    flagged = []
+    for miner in discovery.miners:
+        if miner.values_clamped:
+            flagged.append({
+                "ip": miner.ip,
+                "hostname": miner.hostname,
+                "model": miner.model,
+                "firmware": miner.firmware_type.value if hasattr(miner.firmware_type, 'value') else str(miner.firmware_type),
+                "power_watts": round(miner.power_watts, 1),
+                "hashrate_ghs": round(miner.hashrate_ghs, 1),
+                "hashrate_ths": round(miner.hashrate_ghs / 1000, 2),
+                "clamped_reason": miner.clamped_reason,
+                "is_mining": miner.is_mining,
+                "is_online": miner.is_online,
+            })
+
+    return {
+        "count": len(flagged),
+        "miners": sorted(flagged, key=lambda m: m["ip"]),
+    }
+
+
+# =========================================================================
 # Comprehensive Miner Details Endpoint
 # =========================================================================
 

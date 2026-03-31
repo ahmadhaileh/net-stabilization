@@ -2,8 +2,8 @@
 
 ## Grid Stabilization – Vollständige Änderungshistorie
 
-**Dokumentversion:** 1.0  
-**Zeitraum:** 24. Januar 2026 – 17. Februar 2026  
+**Dokumentversion:** 1.1  
+**Zeitraum:** 24. Januar 2026 – 18. Februar 2026  
 **Basisdokument:** Technische Beschreibung v1.0 (24.01.2026)  
 **Klassifizierung:** Änderungsprotokoll für den Auftraggeber
 
@@ -20,19 +20,23 @@
 7. [Dashboard und Benutzeroberfläche](#7-dashboard-und-benutzeroberfläche)
 8. [Fernzugriff](#8-fernzugriff)
 9. [Konvergenztests und Ergebnisse](#9-konvergenztests-und-ergebnisse)
-10. [Vollständige Commit-Historie](#10-vollständige-commit-historie)
+10. [Spannungsüberwachung und Netzausfallschutz](#10-spannungsüberwachung-und-netzausfallschutz)
+11. [Datenpersistenz und historische Anzeige](#11-datenpersistenz-und-historische-anzeige)
+12. [Vollständige Commit-Historie](#12-vollständige-commit-historie)
 
 ---
 
 ## 1. Zusammenfassung
 
-Seit der technischen Erstbeschreibung vom 24. Januar 2026 wurden insgesamt **33 Änderungen** am System vorgenommen. Die Arbeiten umfassen folgende Schwerpunkte:
+Seit der technischen Erstbeschreibung vom 24. Januar 2026 wurden insgesamt **39 Änderungen** am System vorgenommen. Die Arbeiten umfassen folgende Schwerpunkte:
 
 | Bereich | Änderungen | Beschreibung |
 |---------|------------|--------------|
 | Regelungslogik | 16 | Feedback-Schleife, Puffer, Cooldowns, Kalibrierung |
-| Stromzähler-Integration | 4 | Physikalische Leistungsmessung über BESS-EMS |
-| Dashboard / UI | 6 | Mobilansicht, Sortierung, Diagrammverbesserungen |
+| Stromzähler-Integration | 5 | Physikalische Leistungsmessung, Spannungsüberwachung |
+| Sicherheit | 2 | Netzausfallschutz über Spannungserkennung |
+| Datenpersistenz | 3 | SQLite-Speicherung, Schema-Migration, historische Diagramme |
+| Dashboard / UI | 7 | Mobilansicht, Sortierung, Spannung, historische Daten |
 | Infrastruktur | 4 | Netzwerkumstellung, Docker-Konfiguration, Fernzugriff |
 | Dokumentation | 1 | API-Dokumentation |
 | Tests | 2 | Konvergenztest-Skript |
@@ -44,6 +48,8 @@ Seit der technischen Erstbeschreibung vom 24. Januar 2026 wurden insgesamt **33 
 - Mess-Grundlage: **Physikalischer Stromzähler** integriert (vorher nur Schätzwerte)
 - Umbenennung: **„Net Stabilization" → „Grid Stabilization"**
 - Responsives Design: **Mobile Endgeräte** werden vollständig unterstützt
+- Netzausfallschutz: **Spannungsüberwachung** mit automatischem Idle bei Phasenausfall
+- Datenpersistenz: **Historische Diagramme** aus SQLite-Datenbank, auch nach Neustart verfügbar
 
 ---
 
@@ -412,7 +418,85 @@ Der Test bei Nennleistung (103 kW) schlägt fehl, weil:
 
 ---
 
-## 10. Vollständige Commit-Historie
+## 10. Spannungsüberwachung und Netzausfallschutz
+
+### 10.1 Hintergrund
+
+**Datum:** 17.–18. Februar 2026  
+**Commits:** `7414396`, `35a4914`
+
+Zur Absicherung gegen Netzausfälle (z. B. Phasenausfall) wurde eine Spannungsüberwachung implementiert. Der Stromzähler liefert drei Phasenspannungen (L1-N, L2-N, L3-N), deren Durchschnitt als Referenzwert dient.
+
+### 10.2 Funktionsweise
+
+| Parameter | Wert |
+|-----------|------|
+| **Spannungsschwelle** | 100 V |
+| **Normalspannung** | ~230 V |
+| **Erkennung** | Durchschnitt aller drei Phasen < 100 V |
+| **Reaktion** | Alle Miner sofort auf Idle setzen |
+| **Wiederherstellung** | 3 Retry-Runden nach Spannungsrückkehr |
+
+Bei Unterschreitung der Schwelle (erkennt 2+ Phasenausfälle) wird die gesamte Flotte in den Idle-Zustand versetzt. Nach Rückkehr der Spannung erfolgt eine kontrollierte Wiederherstellung mit `_safe_idle_after_power_restore()`.
+
+### 10.3 Dashboard-Anzeige
+
+Die aktuelle Netzspannung wird im Dashboard neben der Stromzähler-Leistung angezeigt. Bei Werten unter 200 V erfolgt eine farbliche Warnung (rot).
+
+---
+
+## 11. Datenpersistenz und historische Anzeige
+
+### 11.1 Hintergrund
+
+**Datum:** 17.–18. Februar 2026  
+**Commits:** `c343943`, `2ce6794`, `f9fd762`
+
+Zuvor gingen alle Diagrammdaten bei einem Container-Neustart oder VPN-Unterbrechung verloren, da sie nur im Browser-Speicher (localStorage) gehalten wurden. Die Daten werden nun serverseitig in der SQLite-Datenbank gespeichert und beim Öffnen des Dashboards automatisch geladen.
+
+### 11.2 Per-Miner-Snapshots
+
+Alle 60 Sekunden wird für jeden aktiven Miner ein Datensatz gespeichert:
+
+- IP-Adresse, Hostname
+- Hashrate (GH/s), Temperatur (°C)
+- Leistungsverbrauch (W), Frequenz (MHz)
+- Status (mining/idle/offline)
+- Zeitstempel
+
+### 11.3 Fleet-Snapshots (erweitert)
+
+Die Fleet-Snapshots wurden um zusätzliche Felder erweitert:
+
+- `measured_power_kw` – Gemessene Leistung vom Stromzähler
+- `plant_power_kw` – Anlagenleistung
+- `voltage` – Aktuelle Netzspannung
+- `target_power_kw` – Aktuelle Zielleistung
+
+### 11.4 Schema-Migration
+
+Bestehende SQLite-Datenbanken werden automatisch migriert (`_run_migrations()`). Neue Spalten werden per `ALTER TABLE` hinzugefügt, ohne Datenverlust.
+
+### 11.5 API-Endpunkte
+
+| Endpunkt | Methode | Beschreibung |
+|----------|---------|--------------|
+| `/dashboard/api/fleet-snapshots` | GET | Fleet-Verlauf (Standard: 24h, max. 1440 Punkte) |
+| `/dashboard/api/miner-snapshots/{ip}` | GET | Miner-Verlauf (Standard: 24h, max. 1440 Punkte) |
+
+Parameter: `hours` (Zeitraum), `limit` (maximale Datenpunkte).
+
+### 11.6 Frontend-Integration
+
+- **Seitenstart:** `loadHistoryFromServer()` lädt Fleet-Snapshots aus der Datenbank
+- **Miner-Modal:** `loadMinerHistoryFromServer()` lädt Per-Miner-Daten beim Öffnen
+- **Zeitbereich:** Neuer 24H-Button im Miner-Modal
+- **Fallback:** localStorage wird weiterhin als Backup verwendet
+- **Aufbewahrung:** 24h für Snapshots, 7 Tage für Befehlshistorie
+
+---
+
+## 12. Vollständige Commit-Historie
 
 Chronologische Auflistung aller Änderungen seit der technischen Beschreibung (Commit `418b43f`, 24.01.2026):
 
@@ -451,10 +535,16 @@ Chronologische Auflistung aller Änderungen seit der technischen Beschreibung (C
 | 31 | 16.02.2026 | `f0f2700` | Regelung: Richtungsabhängiger Cooldown |
 | 32 | 16.02.2026 | `ff91aa0` | Regelung: Ramp-up-Cooldown 90s→60s |
 | 33 | 17.02.2026 | `62a0676` | Regelung: Zurück auf Miner-Leistung (nach Klärung) |
+| 34 | 17.02.2026 | `7414396` | Sicherheit: Spannungsüberwachung und Netzausfallschutz |
+| 35 | 17.02.2026 | `9cd45ac` | Dashboard: Cache-Bust v6 für neue Spannungsanzeige |
+| 36 | 17.02.2026 | `c343943` | Feature: Per-Miner-Snapshots in SQLite alle 60s |
+| 37 | 17.02.2026 | `2ce6794` | Feature: Schema-Migration für erweiterte Fleet-Snapshots |
+| 38 | 18.02.2026 | `35a4914` | Sicherheit: Spannungsschwelle auf 100 V angepasst |
+| 39 | 18.02.2026 | `f9fd762` | Feature: Historische Daten aus DB laden + 24H-Modal |
 
 ---
 
-## Aktuelle Systemparameter (Stand: 17.02.2026)
+## Aktuelle Systemparameter (Stand: 18.02.2026)
 
 | Parameter | Wert |
 |-----------|------|
@@ -470,9 +560,14 @@ Chronologische Auflistung aller Änderungen seit der technischen Beschreibung (C
 | **Ramp-up-Cooldown** | 60 Sekunden |
 | **Trim-Cooldown** | 30 Sekunden |
 | **Regulierungsintervall** | 30 Sekunden |
+| **Snapshot-Intervall** | 60 Sekunden |
 | **Subnetz** | 192.168.95.0/24 |
 | **Server-IP** | 192.168.95.6 |
 | **Stromzähler** | 192.168.95.4:8044 |
+| **Stromzähler-Endpunkt** | `/api/miners/get-measurement-data` |
+| **Spannungsschwelle** | 100 V (Netzausfallschutz) |
+| **Datenbank** | SQLite (`grid_stabilization.db`) |
+| **Dashboard-Cache** | v7 |
 
 ---
 
@@ -487,3 +582,5 @@ Chronologische Auflistung aller Änderungen seit der technischen Beschreibung (C
 ---
 
 *Dieses Dokument protokolliert alle Änderungen am System Grid Stabilization seit der Erstellung der Technischen Beschreibung v1.0 vom 24. Januar 2026. Es dient dem Auftraggeber als vollständige Nachverfolgung der durchgeführten Arbeiten.*
+
+*Letzte Aktualisierung: 18. Februar 2026*

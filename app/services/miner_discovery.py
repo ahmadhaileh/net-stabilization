@@ -107,6 +107,13 @@ class FirmwareType(str, Enum):
     UNKNOWN = "unknown"
 
 
+# ── Per-miner sanity thresholds (Antminer S9) ────────────────────
+# Any value above these is considered a firmware glitch / false report.
+# Clamped at source so all downstream calculations stay realistic.
+_MAX_MINER_POWER_WATTS = 1500.0   # S9 absolute max ~1400 W
+_MAX_MINER_HASHRATE_GHS = 15000.0  # S9 max ~14 TH/s = 14 000 GH/s
+
+
 @dataclass
 class DiscoveredMiner:
     """Information about a discovered miner."""
@@ -148,6 +155,10 @@ class DiscoveredMiner:
     last_command_time: Optional[datetime] = None
     last_command_type: Optional[str] = None  # 'wake', 'sleep', 'restart', 'reboot', 'config'
     transition_grace_seconds: int = 60  # Grace period after commands
+    
+    # Sanity tracking — set when a reported value was clamped
+    values_clamped: bool = False
+    clamped_reason: str = ""
     
     @property
     def is_transitioning(self) -> bool:
@@ -1216,7 +1227,18 @@ class MinerDiscoveryService:
         
         # Common fields - CGMiner sometimes returns strings, so convert to float
         hashrate_raw = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
-        miner.hashrate_ghs = float(hashrate_raw) if hashrate_raw else 0.0
+        hashrate_val = float(hashrate_raw) if hashrate_raw else 0.0
+        if hashrate_val > _MAX_MINER_HASHRATE_GHS:
+            logger.warning(
+                "Miner reports unrealistic hashrate during discovery — clamped",
+                ip=miner.ip,
+                reported_ghs=round(hashrate_val, 1),
+                clamped_ghs=_MAX_MINER_HASHRATE_GHS,
+            )
+            miner.values_clamped = True
+            miner.clamped_reason = f"hashrate {round(hashrate_val)}GH/s→{int(_MAX_MINER_HASHRATE_GHS)}GH/s"
+            hashrate_val = _MAX_MINER_HASHRATE_GHS
+        miner.hashrate_ghs = hashrate_val
         miner.uptime_seconds = int(summary_data.get("Elapsed", 0) or 0)
         
         # Try to get version for model info
@@ -1287,10 +1309,10 @@ class MinerDiscoveryService:
         try:
             stats = await api.get_stats()
             await self._extract_power_info(miner, stats)
-            # Only update rated power if current reading is HIGHER than estimate
-            # (miner might be running at reduced frequency)
+            # Only update rated power if current reading is higher than estimate,
+            # but never exceed the sanity ceiling.
             if miner.power_watts > miner.rated_power_watts:
-                miner.rated_power_watts = miner.power_watts * 1.1
+                miner.rated_power_watts = min(miner.power_watts * 1.1, _MAX_MINER_POWER_WATTS)
         except Exception:
             pass
         
@@ -1339,14 +1361,28 @@ class MinerDiscoveryService:
             
             # Power - check various formats
             # Vnish reports chain_consumption per hashboard
+            raw_power: Optional[float] = None
             chain_power = [v for k, v in stat.items() 
                           if k.startswith("chain_consumption") and isinstance(v, (int, float)) and v > 0]
             if chain_power:
-                miner.power_watts = sum(chain_power)
+                raw_power = sum(chain_power)
             elif "Power" in stat:
-                miner.power_watts = stat["Power"]
+                raw_power = float(stat["Power"])
             elif "chain_power" in stat:
-                miner.power_watts = stat["chain_power"]
+                raw_power = float(stat["chain_power"])
+
+            if raw_power is not None:
+                if raw_power > _MAX_MINER_POWER_WATTS:
+                    logger.warning(
+                        "Miner reports unrealistic power — clamped",
+                        ip=miner.ip,
+                        reported_watts=round(raw_power, 1),
+                        clamped_watts=_MAX_MINER_POWER_WATTS,
+                    )
+                    miner.values_clamped = True
+                    miner.clamped_reason = f"power {round(raw_power)}W→{int(_MAX_MINER_POWER_WATTS)}W"
+                    raw_power = _MAX_MINER_POWER_WATTS
+                miner.power_watts = raw_power
             
             # Whatsminer style  
             if "Temperature" in stat and miner.temperature_c == 0:
@@ -1382,7 +1418,19 @@ class MinerDiscoveryService:
             
             # CGMiner sometimes returns strings, so convert to float
             hashrate_raw = summary_data.get("GHS 5s", 0) or summary_data.get("GHS av", 0)
-            miner.hashrate_ghs = float(hashrate_raw) if hashrate_raw else 0.0
+            hashrate_val = float(hashrate_raw) if hashrate_raw else 0.0
+            if hashrate_val > _MAX_MINER_HASHRATE_GHS:
+                logger.warning(
+                    "Miner reports unrealistic hashrate — clamped",
+                    ip=miner.ip,
+                    reported_ghs=round(hashrate_val, 1),
+                    clamped_ghs=_MAX_MINER_HASHRATE_GHS,
+                )
+                miner.values_clamped = True
+                reason = f"hashrate {round(hashrate_val)}GH/s→{int(_MAX_MINER_HASHRATE_GHS)}GH/s"
+                miner.clamped_reason = f"{miner.clamped_reason}; {reason}" if miner.clamped_reason else reason
+                hashrate_val = _MAX_MINER_HASHRATE_GHS
+            miner.hashrate_ghs = hashrate_val
             miner.uptime_seconds = int(summary_data.get("Elapsed", 0) or 0)
             miner.is_online = True
             miner.last_seen = datetime.utcnow()
