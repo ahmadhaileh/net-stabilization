@@ -839,15 +839,37 @@ class FleetManager:
                 
                 # ── Update meter-calibrated per-miner and overhead estimates ──
                 # Use exponential moving average (α=0.1) for smooth tracking.
-                # Only update when we have a meaningful number of miners running.
-                if mining_count >= 5 and meter_reading.miners_total_power_kw > 1.0:
+                # Only update when we have a meaningful number of miners running
+                # AND the fleet is stable (few miners transitioning).
+                #
+                # CRITICAL: When miners are waking/sleeping, the meter reading
+                # lags behind the mining_count change.  This creates wildly
+                # wrong measured_per_miner values that poison the EMA and
+                # cause rated_power to oscillate (e.g. 194→843 kW).
+                # Guard 1: require ≥5 miners running with meaningful power
+                # Guard 2: skip when >10% of fleet is transitioning (meter lag)
+                # Guard 3: clamp measured_per_miner to sane S9 range
+                # Guard 4: clamp final EMA value to sane range
+                _MIN_PER_MINER_KW = 0.8   # S9 minimum (underclocked / low-power)
+                _MAX_PER_MINER_KW = 1.6   # S9 maximum (never exceeds ~1500 W)
+                transitioning_count = sum(1 for m in miners if m.is_transitioning)
+                transitioning_pct = (transitioning_count / len(miners) * 100) if miners else 0
+
+                if (mining_count >= 5
+                        and meter_reading.miners_total_power_kw > 1.0
+                        and transitioning_pct <= 10):
                     measured_per_miner = meter_reading.miners_total_power_kw / mining_count
                     measured_overhead = meter_reading.plant_total_power_kw - meter_reading.miners_total_power_kw
-                    
+
+                    # Clamp input before feeding into EMA
+                    measured_per_miner = max(_MIN_PER_MINER_KW, min(_MAX_PER_MINER_KW, measured_per_miner))
+
                     alpha = 0.1 if self._meter_calibration_count > 10 else 0.3  # Learn faster initially
                     self._actual_per_miner_kw = (
                         (1 - alpha) * self._actual_per_miner_kw + alpha * measured_per_miner
                     )
+                    # Clamp output as final safety net
+                    self._actual_per_miner_kw = max(_MIN_PER_MINER_KW, min(_MAX_PER_MINER_KW, self._actual_per_miner_kw))
                     self._plant_overhead_kw = (
                         (1 - alpha) * self._plant_overhead_kw + alpha * max(0, measured_overhead)
                     )
@@ -860,6 +882,13 @@ class FleetManager:
                             plant_overhead_kw=round(self._plant_overhead_kw, 2),
                             samples=self._meter_calibration_count,
                         )
+                elif transitioning_pct > 10:
+                    logger.debug(
+                        "EMA calibration skipped — fleet transitioning",
+                        transitioning_count=transitioning_count,
+                        transitioning_pct=round(transitioning_pct, 1),
+                        mining_count=mining_count,
+                    )
             else:
                 logger.debug(
                     "Power meter unavailable, using miner estimates",
