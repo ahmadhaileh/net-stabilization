@@ -105,12 +105,13 @@ class FleetManager:
         # Deactivation in progress flag - stops all background loops from activating
         self._deactivation_in_progress: bool = False
         
-        # Power regulation settings
-        self._regulation_interval_seconds: int = 30  # Check power every 30 seconds
-        self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
-        self._regulation_warmup_seconds: int = 120  # Wait 2 min for miners to boot before regulating
-        self._regulation_cooldown_seconds: int = 30  # Default cooldown (trim-down is instant)
-        self._regulation_rampup_cooldown_seconds: int = 60  # Cooldown after waking miners (boot in ~60s)
+        # Power regulation settings — tuned for 4-minute convergence, 3% margin
+        self._regulation_interval_seconds: int = 15  # Check power every 15 seconds
+        self._regulation_tolerance_percent: float = 3.0  # Tolerate 3% deviation
+        self._regulation_warmup_seconds: int = 30  # Wait 30s for first miners to report power
+        self._regulation_cooldown_seconds: int = 15  # Trim-down cooldown (instant effect)
+        self._regulation_rampup_cooldown_seconds: int = 30  # Ramp-up cooldown (miners boot ~45-60s)
+        self._miner_command_concurrency: int = 20  # Max concurrent wake/idle API calls
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
         self._last_regulation_was_rampup: bool = False  # Track if last adjustment was ramp-up
@@ -632,16 +633,22 @@ class FleetManager:
                 mining_count=mining_count
             )
             
-            # Shut off the last N miners (by IP, deterministic order)
+            # Shut off the last N miners concurrently (by IP, deterministic order)
             miners_to_idle = mining_miners[-miners_to_trim:]
+            sem = asyncio.Semaphore(self._miner_command_concurrency)
+            async def _idle(m):
+                async with sem:
+                    return m, await self.discovery.set_miner_idle(m.id)
+            results = await asyncio.gather(*[_idle(m) for m in miners_to_idle], return_exceptions=True)
             trimmed = 0
-            for miner in miners_to_idle:
-                ok, msg = await self.discovery.set_miner_idle(miner.id)
+            for item in results:
+                if isinstance(item, Exception):
+                    continue
+                m, (ok, msg) = item
                 if ok:
                     trimmed += 1
-                    logger.info("Regulation trimmed miner", ip=miner.ip)
                 else:
-                    logger.warning("Failed to trim miner", ip=miner.ip, error=msg)
+                    logger.warning("Failed to trim miner", ip=m.ip, error=msg)
             
             logger.info(
                 "Regulation trim complete",
@@ -674,14 +681,22 @@ class FleetManager:
                 backed_off=backed_off_count,
             )
             
+            # Wake miners concurrently
+            to_wake = idle_miners[:miners_to_wake]
+            sem = asyncio.Semaphore(self._miner_command_concurrency)
+            async def _wake(m):
+                async with sem:
+                    return m, await self.discovery.set_miner_active(m.id)
+            results = await asyncio.gather(*[_wake(m) for m in to_wake], return_exceptions=True)
             woken = 0
-            for miner in idle_miners[:miners_to_wake]:
-                ok, msg = await self.discovery.set_miner_active(miner.id)
+            for item in results:
+                if isinstance(item, Exception):
+                    continue
+                m, (ok, msg) = item
                 if ok:
                     woken += 1
-                    logger.info("Regulation woke miner", ip=miner.ip)
                 else:
-                    logger.warning("Failed to wake miner", ip=miner.ip, error=msg)
+                    logger.warning("Failed to wake miner", ip=m.ip, error=msg)
             
             logger.info(
                 "Regulation ramp-up commands sent",
@@ -1352,53 +1367,66 @@ class FleetManager:
         
         # Step 1: Keep miners that are already mining (up to needed)
         sorted_mining = sorted(already_mining, key=lambda m: m.ip)
+        excess_to_idle = []
         for miner in sorted_mining:
             if active_count < miners_needed:
                 results.append(f"{miner.ip}: ON (already)")
                 active_count += 1
             else:
-                # Turn off excess miners
-                ok, msg = await self.discovery.set_miner_idle(miner.id)
+                excess_to_idle.append(miner)
+        
+        # Idle excess miners concurrently
+        if excess_to_idle:
+            sem = asyncio.Semaphore(self._miner_command_concurrency)
+            async def _idle_one(m):
+                async with sem:
+                    return m, await self.discovery.set_miner_idle(m.id)
+            idle_results = await asyncio.gather(*[_idle_one(m) for m in excess_to_idle], return_exceptions=True)
+            for item in idle_results:
+                if isinstance(item, Exception):
+                    continue
+                m, (ok, msg) = item
                 if ok:
                     success_count += 1
-                    results.append(f"{miner.ip}: OFF")
-                    logger.info("Miner idled (excess)", ip=miner.ip)
+                    results.append(f"{m.ip}: OFF")
                 else:
-                    logger.warning("Failed to idle miner", ip=miner.ip, error=msg)
+                    logger.warning("Failed to idle miner", ip=m.ip, error=msg)
         
-        # Step 2: Wake additional miners as needed (only Vnish-capable)
+        # Step 2: Wake additional miners as needed — CONCURRENTLY
+        miners_to_wake_list = []
         sorted_wakeable = sorted(can_wake, key=lambda m: m.ip)
         for miner in sorted_wakeable:
-            if active_count >= miners_needed:
+            if active_count + len(miners_to_wake_list) >= miners_needed:
                 break
-            
-            ok, msg = await self.discovery.set_miner_active(miner.id)
-            if ok:
-                success_count += 1
-                active_count += 1
-                results.append(f"{miner.ip}: ON (waking)")
-                logger.info("Miner wake command sent", ip=miner.ip)
-            else:
-                # Failed to wake - don't count toward active, try next miner
-                logger.warning("Failed to wake miner, trying next", ip=miner.ip, error=msg)
-                results.append(f"{miner.ip}: FAILED")
-
-        # Step 3: If still short, try non-Vnish miners as a fallback
-        if active_count < miners_needed and fallback_wake:
+            miners_to_wake_list.append(miner)
+        
+        # Step 3: If still short, add non-Vnish miners as fallback
+        if active_count + len(miners_to_wake_list) < miners_needed and fallback_wake:
             sorted_fallback = sorted(fallback_wake, key=lambda m: m.ip)
             for miner in sorted_fallback:
-                if active_count >= miners_needed:
+                if active_count + len(miners_to_wake_list) >= miners_needed:
                     break
-
-                ok, msg = await self.discovery.set_miner_active(miner.id)
+                miners_to_wake_list.append(miner)
+        
+        # Send all wake commands concurrently (semaphore limits concurrency)
+        if miners_to_wake_list:
+            sem = asyncio.Semaphore(self._miner_command_concurrency)
+            async def _wake_one(m):
+                async with sem:
+                    return m, await self.discovery.set_miner_active(m.id)
+            wake_results = await asyncio.gather(*[_wake_one(m) for m in miners_to_wake_list], return_exceptions=True)
+            for item in wake_results:
+                if isinstance(item, Exception):
+                    logger.warning("Exception waking miner", error=str(item))
+                    continue
+                m, (ok, msg) = item
                 if ok:
                     success_count += 1
                     active_count += 1
-                    results.append(f"{miner.ip}: ON (fallback)")
-                    logger.info("Fallback miner wake command sent", ip=miner.ip)
+                    results.append(f"{m.ip}: ON (waking)")
                 else:
-                    logger.warning("Fallback wake failed", ip=miner.ip, error=msg)
-                    results.append(f"{miner.ip}: FAILED")
+                    logger.warning("Failed to wake miner", ip=m.ip, error=msg)
+                    results.append(f"{m.ip}: FAILED")
 
         # Step 4: If still short, log capacity shortfall
         if active_count < miners_needed:
@@ -1753,19 +1781,46 @@ class FleetManager:
             self._status.state = FleetState.STANDBY
             return True, "No online miners found"
         
-        # Put each miner into idle mode (even if they report not mining)
-        # This ensures we definitely stop all mining activity
+        # Put ALL miners into idle mode CONCURRENTLY for speed
+        # This ensures we definitely stop all mining activity within seconds.
+        sem = asyncio.Semaphore(self._miner_command_concurrency)
+        async def _idle_one(m):
+            async with sem:
+                return m, await self.discovery.set_miner_idle(m.id)
+        
+        idle_results = await asyncio.gather(
+            *[_idle_one(m) for m in online_miners],
+            return_exceptions=True
+        )
+        
         success_count = 0
-        fail_count = 0
-        for miner in online_miners:
-            ok, msg = await self.discovery.set_miner_idle(miner.id)
+        failed_miners = []
+        for item in idle_results:
+            if isinstance(item, Exception):
+                continue
+            m, (ok, msg) = item
             if ok:
                 success_count += 1
-                logger.info("Miner set to idle", miner_id=miner.id, ip=miner.ip)
             else:
-                fail_count += 1
-                logger.warning("Failed to idle miner", miner_id=miner.id, error=msg)
+                failed_miners.append(m)
+                logger.warning("Failed to idle miner", miner_id=m.id, ip=m.ip, error=msg)
         
+        # Retry failed miners once (some may have timed out under load)
+        if failed_miners:
+            logger.info("Retrying failed idle commands", count=len(failed_miners))
+            retry_results = await asyncio.gather(
+                *[_idle_one(m) for m in failed_miners],
+                return_exceptions=True
+            )
+            for item in retry_results:
+                if isinstance(item, Exception):
+                    continue
+                m, (ok, msg) = item
+                if ok:
+                    success_count += 1
+                    failed_miners = [fm for fm in failed_miners if fm.id != m.id]
+        
+        fail_count = len(online_miners) - success_count
         self._status.state = FleetState.STANDBY
         self._target_power_kw = None  # Clear target so idle enforcement loop kicks in
         return True, f"Sent idle command to {success_count}/{len(online_miners)} miners (failed: {fail_count})"
