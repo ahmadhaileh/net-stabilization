@@ -591,10 +591,16 @@ class FleetManager:
             [m for m in self.discovery.miners if m.is_online and m.is_mining],
             key=lambda m: m.ip
         )
+        # Exclude miners that are still booting (transitioning) or in wake-failure backoff
         idle_miners = sorted(
-            [m for m in self.discovery.miners if m.is_online and not m.is_mining],
+            [m for m in self.discovery.miners
+             if m.is_online and not m.is_mining
+             and not m.is_transitioning
+             and not m.is_wake_backed_off],
             key=lambda m: m.ip
         )
+        transitioning_count = sum(1 for m in self.discovery.miners if m.is_transitioning)
+        backed_off_count = sum(1 for m in self.discovery.miners if m.is_wake_backed_off)
         mining_count = len(mining_miners)
         
         if mining_count == 0:
@@ -663,7 +669,9 @@ class FleetManager:
                 deficit_kw=round(deficit_kw, 1),
                 per_miner_kw=round(per_miner_kw, 3),
                 miners_to_wake=miners_to_wake,
-                idle_available=len(idle_miners)
+                idle_available=len(idle_miners),
+                transitioning=transitioning_count,
+                backed_off=backed_off_count,
             )
             
             woken = 0

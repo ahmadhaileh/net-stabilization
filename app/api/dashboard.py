@@ -1289,6 +1289,7 @@ async def get_suspicious_miners():
     """
     Return a list of miners whose reported power or hashrate was
     clamped because it exceeded the sanity threshold (1500 W / 15 TH).
+    Also includes miners that repeatedly fail to wake from sleep.
     Useful for identifying hardware with corrupt firmware readings.
     """
     fleet_manager = get_fleet_manager()
@@ -1296,7 +1297,7 @@ async def get_suspicious_miners():
 
     flagged = []
     for miner in discovery.miners:
-        if miner.values_clamped:
+        if miner.values_clamped or miner.consecutive_wake_failures > 0:
             flagged.append({
                 "ip": miner.ip,
                 "hostname": miner.hostname,
@@ -1305,7 +1306,9 @@ async def get_suspicious_miners():
                 "power_watts": round(miner.power_watts, 1),
                 "hashrate_ghs": round(miner.hashrate_ghs, 1),
                 "hashrate_ths": round(miner.hashrate_ghs / 1000, 2),
-                "clamped_reason": miner.clamped_reason,
+                "clamped_reason": miner.clamped_reason if miner.values_clamped else "",
+                "wake_failures": miner.consecutive_wake_failures,
+                "wake_backed_off": miner.is_wake_backed_off,
                 "is_mining": miner.is_mining,
                 "is_online": miner.is_online,
             })

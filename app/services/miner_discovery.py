@@ -71,7 +71,7 @@ import socket
 import ipaddress
 import httpx
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -156,6 +156,10 @@ class DiscoveredMiner:
     last_command_type: Optional[str] = None  # 'wake', 'sleep', 'restart', 'reboot', 'config'
     transition_grace_seconds: int = 60  # Grace period after commands
     
+    # Wake failure tracking — miners that accept the wake command but never start mining
+    consecutive_wake_failures: int = 0
+    _wake_backoff_until: Optional[datetime] = None
+    
     # Sanity tracking — set when a reported value was clamped
     values_clamped: bool = False
     clamped_reason: str = ""
@@ -167,6 +171,25 @@ class DiscoveredMiner:
             return False
         elapsed = (datetime.utcnow() - self.last_command_time).total_seconds()
         return elapsed < self.transition_grace_seconds
+    
+    @property
+    def is_wake_backed_off(self) -> bool:
+        """True if this miner is in a wake-failure backoff period."""
+        if self._wake_backoff_until is None:
+            return False
+        return datetime.utcnow() < self._wake_backoff_until
+    
+    def record_wake_failure(self):
+        """Record that a wake attempt did not result in mining."""
+        self.consecutive_wake_failures += 1
+        # Exponential backoff: 2min, 4min, 8min, max 15min
+        backoff_seconds = min(120 * (2 ** (self.consecutive_wake_failures - 1)), 900)
+        self._wake_backoff_until = datetime.utcnow() + timedelta(seconds=backoff_seconds)
+    
+    def clear_wake_failures(self):
+        """Reset wake failure tracking (miner successfully started mining)."""
+        self.consecutive_wake_failures = 0
+        self._wake_backoff_until = None
     
     def mark_command_sent(self, command_type: str, grace_seconds: int = None):
         """Mark that a command was sent to this miner."""
@@ -1458,6 +1481,15 @@ class MinerDiscoveryService:
             except Exception:
                 pass
             
+            # Track wake success: miner is hashing → clear any wake failure backoff
+            if miner.is_mining and miner.consecutive_wake_failures > 0:
+                logger.info(
+                    "Miner recovered after wake failures",
+                    ip=miner.ip,
+                    previous_failures=miner.consecutive_wake_failures,
+                )
+                miner.clear_wake_failures()
+            
             # Get current frequency from miner config (for frequency-based power control)
             try:
                 vnish = VnishWebAPI(miner.ip)
@@ -1491,6 +1523,22 @@ class MinerDiscoveryService:
                     miner.power_mode = MinerPowerMode.IDLE
                     miner.last_seen = datetime.utcnow()
                     miner.consecutive_failures = 0
+                    
+                    # Track wake failure: if we sent a wake command and the grace
+                    # period has expired but the miner is still idle, record failure
+                    if (miner.last_command_type == 'wake'
+                            and miner.last_command_time
+                            and not miner.is_transitioning):
+                        miner.record_wake_failure()
+                        logger.warning(
+                            "Miner failed to wake — backing off",
+                            ip=miner.ip,
+                            consecutive_failures=miner.consecutive_wake_failures,
+                            backoff_until=miner._wake_backoff_until.isoformat() if miner._wake_backoff_until else None,
+                        )
+                        # Clear last_command so we don't re-count on next update
+                        miner.last_command_type = None
+                    
                     logger.info(
                         "Miner in idle mode (CGMiner stopped)",
                         miner_id=miner_id,
