@@ -992,6 +992,9 @@ class MinerDiscoveryService:
         self._active_pool_user: str = ""
         self._active_pool_pass: str = ""
         
+        # Semaphore to limit concurrent miner polls (prevent network storm)
+        self._poll_semaphore = asyncio.Semaphore(50)
+        
         # Snapshot timing - track last snapshot time per miner
         self._last_snapshot_time: Dict[str, datetime] = {}
         self._snapshot_interval = settings.snapshot_interval_seconds
@@ -1509,20 +1512,57 @@ class MinerDiscoveryService:
             return miner
             
         except ConnectionError:
-            # CGMiner API not responding - check if it's in idle mode via Vnish Web API
+            # CGMiner API not responding - check Vnish Web API for actual mining status.
+            # Key insight: during boot, CGMiner port 4028 takes 80-130s to open,
+            # but the Vnish web API (port 80) responds immediately and can report
+            # whether cgminer is actually running and mining.
             logger.debug("CGMiner API not responding, trying Vnish Web API", ip=miner.ip)
             
             vnish = VnishWebAPI(miner.ip)
             try:
-                if await vnish.is_vnish_available():
+                # Try get_miner_status.cgi first — it tells us if mining is active
+                status = await vnish.get_status()
+                miner.is_online = True
+                miner.last_seen = datetime.utcnow()
+                miner.consecutive_failures = 0
+                
+                # Parse mining status from Vnish web API response
+                # Vnish returns summary with ghs5s/GHS 5s and elapsed/Elapsed
+                summary_data = status.get("summary") or status.get("SUMMARY", {})
+                if isinstance(summary_data, list) and len(summary_data) > 0:
+                    summary_data = summary_data[0]
+                
+                vnish_hashrate = 0.0
+                if summary_data:
+                    hr_raw = summary_data.get("ghs5s") or summary_data.get("GHS 5s", 0)
+                    vnish_hashrate = float(hr_raw) if hr_raw else 0.0
+                
+                if vnish_hashrate > 0:
+                    # Miner IS mining — CGMiner port just hasn't opened yet
+                    miner.is_mining = True
+                    miner.hashrate_ghs = min(vnish_hashrate, _MAX_MINER_HASHRATE_GHS)
+                    miner.power_mode = MinerPowerMode.NORMAL
+                    
+                    # Clear wake failures — miner is working
+                    if miner.consecutive_wake_failures > 0:
+                        logger.info(
+                            "Miner mining detected via Vnish API (CGMiner port not yet open)",
+                            ip=miner.ip,
+                            hashrate_ghs=round(vnish_hashrate, 1),
+                        )
+                        miner.clear_wake_failures()
+                    else:
+                        logger.debug(
+                            "Miner mining detected via Vnish API",
+                            ip=miner.ip,
+                            hashrate_ghs=round(vnish_hashrate, 1),
+                        )
+                else:
                     # Miner is reachable but CGMiner is stopped (idle mode)
-                    miner.is_online = True  # Vnish web UI is responding
-                    miner.is_mining = False  # CGMiner not running
+                    miner.is_mining = False
                     miner.hashrate_ghs = 0
-                    miner.power_watts = 0  # Not consuming mining power
+                    miner.power_watts = 0
                     miner.power_mode = MinerPowerMode.IDLE
-                    miner.last_seen = datetime.utcnow()
-                    miner.consecutive_failures = 0
                     
                     # Track wake failure: if we sent a wake command and the grace
                     # period has expired but the miner is still idle, record failure
@@ -1544,7 +1584,8 @@ class MinerDiscoveryService:
                         miner_id=miner_id,
                         ip=miner.ip
                     )
-                    return miner
+                
+                return miner
             except Exception as e:
                 logger.debug("Vnish Web API also not available", ip=miner.ip, error=str(e))
             
@@ -1577,7 +1618,12 @@ class MinerDiscoveryService:
     async def update_all_miners(self) -> List[DiscoveredMiner]:
         """Update status for all registered miners."""
         miner_ids = list(self._miners.keys())
-        tasks = [self.update_miner_status(mid) for mid in miner_ids]
+        
+        async def _poll_with_semaphore(mid: str):
+            async with self._poll_semaphore:
+                return await self.update_miner_status(mid)
+        
+        tasks = [_poll_with_semaphore(mid) for mid in miner_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         updated = []

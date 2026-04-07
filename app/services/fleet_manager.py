@@ -496,21 +496,19 @@ class FleetManager:
                         )
                         continue
                 
-                # Check if many miners are still transitioning (waking/sleeping)
-                # Only skip if more than 20% of miners are transitioning to avoid blocking
-                # regulation when just a few miners are slow to wake
+                # Log transitioning count for debugging but do NOT skip regulation.
+                # With Vnish web API mining detection, booting miners are correctly
+                # detected as mining, so transitioning count is reliable and does not
+                # inflate the idle pool.
                 if self._use_direct_mode:
                     total_miners = len(list(self.discovery.miners))
                     transitioning_count = sum(1 for m in self.discovery.miners if m.is_transitioning)
-                    transitioning_pct = (transitioning_count / total_miners * 100) if total_miners > 0 else 0
-                    if transitioning_pct > 20:
+                    if transitioning_count > 0:
                         logger.debug(
-                            "Regulation skipped - too many miners transitioning",
+                            "Miners in transition (regulation continues)",
                             transitioning_count=transitioning_count,
                             total_miners=total_miners,
-                            transitioning_pct=round(transitioning_pct, 1)
                         )
-                        continue
                 
                 # Get current actual power
                 actual_power_kw = self._status.active_power_kw
