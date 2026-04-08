@@ -120,7 +120,7 @@ class FleetManager:
         # Tracks miners whose wake commands were sent but haven't been detected
         # as mining yet.  Prevents regulation from over-waking.
         self._pending_wakes: Dict[str, datetime] = {}  # miner_id -> wake_time
-        self._wake_grace_seconds: int = 300  # How long to consider a wake "pending" (miners boot in 60-90s, detection takes longer)
+        self._wake_grace_seconds: int = 180  # How long to consider a wake "pending" (miners boot in 60-90s, detection ~30s more; 180s gives ample time)
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -1453,10 +1453,11 @@ class FleetManager:
         # OVERSHOOT strategy: turn on MORE miners than needed, then trim excess.
         # Rationale: turning miners OFF is instant (<1s), turning ON takes ~2 min.
         # Overshooting then trimming reaches target in ~3 min vs 15+ min incrementally.
+        # Boot failure rate is ~25% on mass-wake, so overshoot 25% to compensate.
         miners_to_wake = miners_needed - len(already_mining)
         if miners_to_wake > 5:
-            # Significant ramp-up: add 10% overshoot buffer
-            overshoot = max(3, int(miners_needed * 0.10))
+            # Significant ramp-up: add 25% overshoot buffer (boot failure ~25%)
+            overshoot = max(3, int(miners_needed * 0.25))
             miners_needed_buffered = min(miners_needed + overshoot, max_possible_miners)
             logger.info(
                 "Overshoot buffer applied for fast convergence",
