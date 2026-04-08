@@ -1452,21 +1452,25 @@ class FleetManager:
 
         # OVERSHOOT strategy: turn on MORE miners than needed, then trim excess.
         # Rationale: turning miners OFF is instant (<1s), turning ON takes ~2 min.
-        # Overshooting then trimming reaches target in ~3 min vs 15+ min incrementally.
-        # Keep overshoot moderate (10%) — too aggressive causes voltage-sag on
-        # mass-wake and *lowers* the boot-success rate (e.g. 57% at 171 vs 76%
-        # at 152 simultaneous wakes).  Regulation re-ramps after grace expiry.
+        # Overshooting then trimming converges fast.  Phased activation (waves
+        # of 80) prevents voltage-sag, so we can safely wake ALL miners when
+        # the target requires >70% of the fleet.
         miners_to_wake = miners_needed - len(already_mining)
         if miners_to_wake > 5:
-            # Significant ramp-up: add 10% overshoot buffer
-            overshoot = max(3, int(miners_needed * 0.10))
-            miners_needed_buffered = min(miners_needed + overshoot, max_possible_miners)
+            if miners_needed >= max_possible_miners * 0.70:
+                # Large activation: wake everything, trim after boot.
+                # Phased wake (80/wave) keeps inrush manageable.
+                miners_needed_buffered = max_possible_miners
+            else:
+                # Moderate activation: 10% overshoot
+                overshoot = max(3, int(miners_needed * 0.10))
+                miners_needed_buffered = min(miners_needed + overshoot, max_possible_miners)
             logger.info(
                 "Overshoot buffer applied for fast convergence",
                 base_needed=miners_needed,
-                overshoot=overshoot,
                 total_with_buffer=miners_needed_buffered,
-                miners_to_wake=miners_to_wake
+                miners_to_wake=miners_to_wake,
+                wake_all=(miners_needed_buffered == max_possible_miners),
             )
             miners_needed = miners_needed_buffered
         
@@ -1531,13 +1535,23 @@ class FleetManager:
                     break
                 miners_to_wake_list.append(miner)
         
-        # Send all wake commands concurrently (semaphore limits concurrency)
+        # Send wake commands — phased to avoid voltage sag from inrush current.
+        # Waking >80 miners simultaneously causes ~25-40% boot failure.
+        # Splitting into waves of ~80 keeps inrush manageable (~112 kW per wave).
+        _WAVE_SIZE = 80
+        _WAVE_DELAY_SECONDS = 45
+        
         if miners_to_wake_list:
             sem = asyncio.Semaphore(self._miner_command_concurrency)
             async def _wake_one(m):
                 async with sem:
                     return m, await self.discovery.set_miner_active(m.id)
-            wake_results = await asyncio.gather(*[_wake_one(m) for m in miners_to_wake_list], return_exceptions=True)
+            
+            wave1 = miners_to_wake_list[:_WAVE_SIZE]
+            wave2 = miners_to_wake_list[_WAVE_SIZE:]
+            
+            # Wave 1: immediate
+            wake_results = await asyncio.gather(*[_wake_one(m) for m in wave1], return_exceptions=True)
             woken_ids = []
             for item in wake_results:
                 if isinstance(item, Exception):
@@ -1552,8 +1566,33 @@ class FleetManager:
                 else:
                     logger.warning("Failed to wake miner", ip=m.ip, error=msg)
                     results.append(f"{m.ip}: FAILED")
-            # Record wakes at fleet level for pending-wake tracking
             self._record_wakes(woken_ids)
+            
+            # Wave 2: delayed background task to reduce inrush current
+            if wave2:
+                logger.info(
+                    "Scheduling wave 2 activation",
+                    wave1_sent=len(woken_ids),
+                    wave2_queued=len(wave2),
+                    delay_seconds=_WAVE_DELAY_SECONDS,
+                )
+                async def _send_wave2():
+                    await asyncio.sleep(_WAVE_DELAY_SECONDS)
+                    w2_results = await asyncio.gather(*[_wake_one(m) for m in wave2], return_exceptions=True)
+                    w2_ids = []
+                    for item in w2_results:
+                        if isinstance(item, Exception):
+                            continue
+                        m, (ok, msg) = item
+                        if ok:
+                            w2_ids.append(m.id)
+                    self._record_wakes(w2_ids)
+                    logger.info(
+                        "Wave 2 activation complete",
+                        commands_sent=len(w2_ids),
+                        total_pending=len(self._pending_wakes),
+                    )
+                asyncio.create_task(_send_wave2())
 
         # Step 4: If still short, log capacity shortfall
         if active_count < miners_needed:
