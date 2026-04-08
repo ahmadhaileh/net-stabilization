@@ -1940,24 +1940,24 @@ class MinerDiscoveryService:
     
     async def _disable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Stop miner using stop_bmminer.cgi (most reliable method).
+        Sleep miner using do_sleep_mode.cgi mode=1 (idempotent).
         
-        This directly stops the cgminer process.
+        Safe to call on already-sleeping miners — it's a no-op.
         """
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            if await vnish.stop_cgminer():
+            if await vnish.set_sleep_mode(enable=True):
                 miner.power_mode = MinerPowerMode.IDLE
                 miner.is_mining = False
                 miner.hashrate_ghs = 0
-                return True, "Miner stopped"
+                return True, "Miner sleeping"
             else:
-                logger.warning("Stop command failed", ip=miner.ip)
-                return False, "Failed to stop miner"
+                logger.warning("Sleep command failed", ip=miner.ip)
+                return False, "Failed to sleep miner"
                 
         except Exception as e:
-            logger.error("Failed to stop miner", ip=miner.ip, error=str(e))
+            logger.error("Failed to sleep miner", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def _enable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
