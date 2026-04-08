@@ -111,7 +111,7 @@ class FleetManager:
         self._regulation_warmup_seconds: int = 30  # Wait 30s for first miners to report power
         self._regulation_cooldown_seconds: int = 15  # Trim-down cooldown (instant effect)
         self._regulation_rampup_cooldown_seconds: int = 30  # Ramp-up cooldown (reduced: trust meter, re-check fast)
-        self._miner_command_concurrency: int = 20  # Max concurrent wake/idle API calls
+        self._miner_command_concurrency: int = 50  # Max concurrent wake/idle API calls
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
         self._last_regulation_was_rampup: bool = False  # Track if last adjustment was ramp-up
@@ -120,7 +120,7 @@ class FleetManager:
         # Tracks miners whose wake commands were sent but haven't been detected
         # as mining yet.  Prevents regulation from over-waking.
         self._pending_wakes: Dict[str, datetime] = {}  # miner_id -> wake_time
-        self._wake_grace_seconds: int = 300  # How long to consider a wake "pending" (171 simultaneous boots need 3-5 min)
+        self._wake_grace_seconds: int = 120  # How long to consider a wake "pending" (miners boot in 60-90s)
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)

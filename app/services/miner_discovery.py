@@ -371,7 +371,7 @@ class VnishWebAPI:
         port: Optional[int] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
-        timeout: float = 10.0
+        timeout: float = 5.0
     ):
         settings = get_settings()
         self.host = host
@@ -1410,6 +1410,64 @@ class MinerDiscoveryService:
     # Miner Status Updates
     # =========================================================================
     
+    async def _poll_via_vnish(self, miner: DiscoveredMiner) -> Optional[DiscoveredMiner]:
+        """
+        Fast-path poll for miners known to be sleeping/idle.
+        
+        Skips CGMiner (port 4028 is closed during sleep) and goes directly
+        to the Vnish Web API (port 80, always available).  If hashrate > 0,
+        the miner has woken up and we switch back to normal polling next cycle.
+        """
+        vnish = VnishWebAPI(miner.ip, timeout=self.api_timeout)
+        try:
+            status = await vnish.get_status()
+            miner.is_online = True
+            miner.last_seen = datetime.utcnow()
+            miner.consecutive_failures = 0
+
+            summary_data = status.get("summary") or status.get("SUMMARY", {})
+            if isinstance(summary_data, list) and len(summary_data) > 0:
+                summary_data = summary_data[0]
+
+            vnish_hashrate = 0.0
+            if summary_data:
+                hr_raw = summary_data.get("ghs5s") or summary_data.get("GHS 5s", 0)
+                vnish_hashrate = float(hr_raw) if hr_raw else 0.0
+
+            if vnish_hashrate > 0:
+                miner.is_mining = True
+                miner.hashrate_ghs = min(vnish_hashrate, _MAX_MINER_HASHRATE_GHS)
+                miner.power_mode = MinerPowerMode.NORMAL
+                if miner.consecutive_wake_failures > 0:
+                    miner.clear_wake_failures()
+                logger.info("Sleeping miner woke up (fast-path)", ip=miner.ip,
+                            hashrate_ghs=round(vnish_hashrate, 1))
+            else:
+                miner.is_mining = False
+                miner.hashrate_ghs = 0
+                miner.power_watts = 0
+                # Track wake failure if grace expired
+                if (miner.last_command_type == 'wake'
+                        and miner.last_command_time
+                        and not miner.is_transitioning):
+                    miner.record_wake_failure()
+                    logger.warning("Miner failed to wake (fast-path)",
+                                   ip=miner.ip,
+                                   consecutive_failures=miner.consecutive_wake_failures)
+                    miner.last_command_type = None
+
+            return miner
+        except Exception as e:
+            # Vnish not reachable either — truly offline
+            if miner.is_transitioning:
+                logger.debug("Sleeping miner not reachable, in transition", ip=miner.ip)
+                return miner
+            miner.is_online = False
+            miner.is_mining = False
+            miner.consecutive_failures += 1
+            logger.warning("Sleeping miner offline (fast-path)", ip=miner.ip, error=str(e))
+            return miner
+
     async def update_miner_status(self, miner_id: str) -> Optional[DiscoveredMiner]:
         """
         Update status for a single miner.
@@ -1424,6 +1482,12 @@ class MinerDiscoveryService:
             miner = self._miners.get(miner_id)
             if not miner:
                 return None
+        
+        # Optimization: if miner is known idle/sleeping, skip CGMiner (port 4028
+        # is closed during sleep) and go straight to Vnish Web API.  This avoids
+        # a 5s timeout per sleeping miner and makes the poll cycle much faster.
+        if miner.power_mode == MinerPowerMode.IDLE and not miner.is_mining:
+            return await self._poll_via_vnish(miner)
         
         api = CGMinerAPI(miner.ip, miner.port, timeout=self.api_timeout)
         
@@ -1989,9 +2053,8 @@ class MinerDiscoveryService:
             logger.info("Waking miner from sleep mode", ip=miner.ip)
             
             # Mark that we're sending a wake command
-            # Simultaneous fleet boots (171 miners) take 3-5 min due to
-            # network congestion and staggered pool reconnects.
-            miner.mark_command_sent('wake', grace_seconds=300)
+            # Miners boot in 60-90s; 120s grace is generous enough.
+            miner.mark_command_sent('wake', grace_seconds=120)
             
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
