@@ -120,7 +120,8 @@ class FleetManager:
         # Tracks miners whose wake commands were sent but haven't been detected
         # as mining yet.  Prevents regulation from over-waking.
         self._pending_wakes: Dict[str, datetime] = {}  # miner_id -> wake_time
-        self._wake_grace_seconds: int = 300  # How long to consider a wake "pending" (171 simultaneous boots need 3-5 min)
+        self._wake_grace_seconds: int = 120  # How long to consider a wake "pending" before expiry
+        self._wake_retry_seconds: int = 60  # Resend wake command after this many seconds if still idle
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -597,6 +598,52 @@ class FleetManager:
         """Remove miner from pending wakes (detected as mining)."""
         self._pending_wakes.pop(miner_id, None)
 
+    async def _retry_stale_wakes(self):
+        """
+        Resend wake commands for miners that have been pending > _wake_retry_seconds
+        but are still idle. ~7-10% of do_sleep_mode wake commands fail silently
+        (return HTTP 200 OK but don't actually start CGMiner).
+        """
+        now = datetime.utcnow()
+        stale = [
+            (mid, t) for mid, t in self._pending_wakes.items()
+            if self._wake_retry_seconds <= (now - t).total_seconds() < self._wake_grace_seconds
+        ]
+        if not stale:
+            return
+
+        # Only retry miners that are still idle (not yet mining)
+        to_retry = []
+        for mid, wake_time in stale:
+            m = self.discovery.get_miner(mid)
+            if m and m.is_online and not m.is_mining:
+                to_retry.append(m)
+
+        if not to_retry:
+            return
+
+        logger.info(
+            "Retrying stale wake commands",
+            count=len(to_retry),
+            ips=[m.ip for m in to_retry],
+        )
+
+        sem = asyncio.Semaphore(self._miner_command_concurrency)
+        async def _rewake(m):
+            async with sem:
+                return m, await self.discovery.set_miner_active(m.id)
+        results = await asyncio.gather(*[_rewake(m) for m in to_retry], return_exceptions=True)
+        retried = 0
+        for item in results:
+            if isinstance(item, Exception):
+                continue
+            m, (ok, msg) = item
+            if ok:
+                retried += 1
+                # Reset the pending wake timer so we don't retry again immediately
+                self._pending_wakes[m.id] = now
+        logger.info("Stale wake retry complete", retried=retried, total=len(to_retry))
+
     async def _regulate_on_off(self, actual_power_kw: float, target_power_kw: float):
         """
         Smart on/off regulation using actual fleet data.
@@ -730,6 +777,9 @@ class FleetManager:
             # Account for pending wakes that haven't shown up yet
             effective_power = actual_power_kw + expected_pending_kw
             if effective_power >= target_power_kw * 0.95:
+                # Retry stale pending wakes: if a wake command was sent >60s ago
+                # and the miner is still idle, resend — ~7% of wakes fail silently.
+                await self._retry_stale_wakes()
                 logger.info(
                     "Regulation: enough miners pending, waiting for boot",
                     actual_kw=round(actual_power_kw, 1),
@@ -746,6 +796,8 @@ class FleetManager:
             miners_to_wake = min(miners_to_wake + 1, len(idle_miners))
             
             if not idle_miners:
+                # No idle miners available, but retry stale pending wakes
+                await self._retry_stale_wakes()
                 logger.info(
                     "Regulation: no idle miners to wake, at capacity",
                     pending_wakes=pending_wakes,

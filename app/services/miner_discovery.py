@@ -1991,7 +1991,7 @@ class MinerDiscoveryService:
             # Mark that we're sending a wake command
             # Simultaneous fleet boots (171 miners) take 3-5 min due to
             # network congestion and staggered pool reconnects.
-            miner.mark_command_sent('wake', grace_seconds=300)
+            miner.mark_command_sent('wake', grace_seconds=120)
             
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
