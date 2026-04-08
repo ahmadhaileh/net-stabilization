@@ -2180,3 +2180,29 @@ async def update_pool_settings(request: PoolUpdateRequest):
             "error": f"Pool update failed: {str(e)}"
         }
 
+
+# =========================================================================
+# Dev Mode
+# =========================================================================
+
+@router.post(
+    "/dev_mode",
+    summary="Toggle dev mode (pauses idle enforcement and regulation)"
+)
+async def toggle_dev_mode(enabled: bool = True):
+    """
+    Toggle dev mode on/off.
+    
+    When enabled, the server stops:
+    - Idle enforcement (won't re-sleep miners in STANDBY)
+    - Power regulation (won't trim/wake miners)
+    
+    This lets you manually test individual miners without the server
+    interfering. Remember to turn it off when done.
+    """
+    fleet_manager = get_fleet_manager()
+    fleet_manager._dev_mode = enabled
+    state = "ON" if enabled else "OFF"
+    logger.info(f"Dev mode {state}")
+    return {"success": True, "dev_mode": enabled, "message": f"Dev mode {state}"}
+

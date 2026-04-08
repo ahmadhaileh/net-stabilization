@@ -126,6 +126,10 @@ class FleetManager:
         self._manual_override = self.db.get_setting("manual_override", False)
         self._override_power_kw = self.db.get_setting("override_power_kw", None)
         
+        # Dev mode: pauses idle enforcement and regulation so manual miner
+        # tests don't get interfered with by the server.
+        self._dev_mode: bool = False
+        
         # Power control mode - load from DB (defaults to on_off)
         # "frequency" = fine-grained frequency scaling
         # "on_off" = simple on/off per miner
@@ -462,6 +466,10 @@ class FleetManager:
                 if self._manual_override:
                     continue
                 
+                # Skip in dev mode
+                if self._dev_mode:
+                    continue
+                
                 # Skip if not in running state
                 if self._status.state != FleetState.RUNNING:
                     continue
@@ -636,14 +644,18 @@ class FleetManager:
         expected_pending_kw = pending_wakes * per_miner_kw
         
         if mining_count == 0 and pending_wakes > 0:
-            # Miners are waking but none detected yet — wait for boot
-            logger.info(
-                "Regulation: no mining detected yet, but wakes pending — waiting",
-                pending_wakes=pending_wakes,
-                expected_pending_kw=round(expected_pending_kw, 1),
-                target_kw=round(target_power_kw, 1),
-            )
-            return
+            # Miners are waking but none detected via polling yet.
+            # If the meter already shows significant power, miners ARE running
+            # even if polling hasn't caught up — don't block, let ramp-up continue.
+            if actual_power_kw < 10.0:
+                logger.info(
+                    "Regulation: no mining detected yet, but wakes pending — waiting",
+                    pending_wakes=pending_wakes,
+                    expected_pending_kw=round(expected_pending_kw, 1),
+                    target_kw=round(target_power_kw, 1),
+                    actual_kw=round(actual_power_kw, 1),
+                )
+                return
         
         if mining_count == 0 and pending_wakes == 0:
             logger.warning("Regulation: no mining miners and no pending wakes, deferring to full activation")
@@ -727,8 +739,17 @@ class FleetManager:
             
         else:
             # === RAMP UP (slow — miners take ~2 min to boot) ===
-            # Account for pending wakes that haven't shown up yet
-            effective_power = actual_power_kw + expected_pending_kw
+            # When a power meter is available, actual_power_kw already includes
+            # power from booting miners (even if they haven't been detected as
+            # "mining" yet).  Adding expected_pending_kw would double-count them
+            # and make regulation think we have way more power than we do.
+            # Only add pending estimates when there is NO meter.
+            if self.power_meter and actual_power_kw > 5.0:
+                # Meter is ground truth — don't add pending estimates on top
+                effective_power = actual_power_kw
+            else:
+                # No meter — use pending estimate as best guess
+                effective_power = actual_power_kw + expected_pending_kw
             if effective_power >= target_power_kw * 0.95:
                 logger.info(
                     "Regulation: enough miners pending, waiting for boot",
@@ -820,6 +841,10 @@ class FleetManager:
                 
                 # Skip if in manual override mode
                 if self._manual_override:
+                    continue
+                
+                # Skip in dev mode — don't interfere with manual tests
+                if self._dev_mode:
                     continue
                 
                 # In direct mode, find any miners that are mining when they shouldn't be
