@@ -1190,21 +1190,15 @@ class MinerDiscoveryService:
                 if sysinfo and "minertype" in sysinfo:
                     minertype = sysinfo.get("minertype", "")
                     
-                    # Detect firmware type from minertype string
-                    firmware_type = FirmwareType.UNKNOWN
+                    # If the Vnish web API responds, this IS a Vnish miner.
+                    # Stock firmware does not have these CGI endpoints.
+                    firmware_type = FirmwareType.VNISH
                     firmware_version = ""
                     if "vnish" in minertype.lower():
-                        firmware_type = FirmwareType.VNISH
                         # Parse version from "Antminer S9 (vnish 3.9.0)"
                         match = re.search(r'vnish\s*(\d+\.\d+\.?\d*)', minertype, re.IGNORECASE)
                         if match:
                             firmware_version = match.group(1)
-                    elif "braiins" in minertype.lower() or "bos" in minertype.lower():
-                        firmware_type = FirmwareType.BRAIINS
-                    elif "marathon" in minertype.lower():
-                        firmware_type = FirmwareType.MARATHON
-                    else:
-                        firmware_type = FirmwareType.STOCK
                     
                     # It's a Vnish miner in idle mode!
                     miner = DiscoveredMiner(
@@ -1309,18 +1303,13 @@ class MinerDiscoveryService:
                     # Update model with full info from web API
                     miner.model = minertype
                     
-                    # Detect firmware type
+                    # If the Vnish web API responds, this IS a Vnish miner.
+                    # Stock firmware does not have these CGI endpoints.
+                    miner.firmware_type = FirmwareType.VNISH
                     if "vnish" in minertype.lower():
-                        miner.firmware_type = FirmwareType.VNISH
                         match = re.search(r'vnish\s*(\d+\.\d+\.?\d*)', minertype, re.IGNORECASE)
                         if match:
                             miner.firmware_version = match.group(1)
-                    elif "braiins" in minertype.lower() or "bos" in minertype.lower():
-                        miner.firmware_type = FirmwareType.BRAIINS
-                    elif "marathon" in minertype.lower():
-                        miner.firmware_type = FirmwareType.MARATHON
-                    else:
-                        miner.firmware_type = FirmwareType.STOCK
                     
                     # Get MAC address if not already set
                     if not miner.mac_address:
