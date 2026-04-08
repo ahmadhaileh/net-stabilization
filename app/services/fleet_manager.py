@@ -110,11 +110,17 @@ class FleetManager:
         self._regulation_tolerance_percent: float = 3.0  # Tolerate 3% deviation
         self._regulation_warmup_seconds: int = 30  # Wait 30s for first miners to report power
         self._regulation_cooldown_seconds: int = 15  # Trim-down cooldown (instant effect)
-        self._regulation_rampup_cooldown_seconds: int = 30  # Ramp-up cooldown (miners boot ~45-60s)
+        self._regulation_rampup_cooldown_seconds: int = 120  # Ramp-up cooldown (miners boot 80-130s)
         self._miner_command_concurrency: int = 20  # Max concurrent wake/idle API calls
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
         self._last_regulation_was_rampup: bool = False  # Track if last adjustment was ramp-up
+        
+        # Fleet-level wake tracking — independent of per-miner is_transitioning.
+        # Tracks miners whose wake commands were sent but haven't been detected
+        # as mining yet.  Prevents regulation from over-waking.
+        self._pending_wakes: Dict[str, datetime] = {}  # miner_id -> wake_time
+        self._wake_grace_seconds: int = 150  # How long to consider a wake "pending"
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -574,6 +580,25 @@ class FleetManager:
             except Exception as e:
                 logger.error("Error in regulation loop", error=str(e))
     
+    def _count_pending_wakes(self) -> int:
+        """Count miners with pending wake commands still within grace period."""
+        now = datetime.utcnow()
+        expired = [mid for mid, t in self._pending_wakes.items()
+                   if (now - t).total_seconds() >= self._wake_grace_seconds]
+        for mid in expired:
+            del self._pending_wakes[mid]
+        return len(self._pending_wakes)
+
+    def _record_wakes(self, miner_ids: list):
+        """Record that wake commands were sent for these miners."""
+        now = datetime.utcnow()
+        for mid in miner_ids:
+            self._pending_wakes[mid] = now
+
+    def _clear_pending_wake(self, miner_id: str):
+        """Remove miner from pending wakes (detected as mining)."""
+        self._pending_wakes.pop(miner_id, None)
+
     async def _regulate_on_off(self, actual_power_kw: float, target_power_kw: float):
         """
         Smart on/off regulation using actual fleet data.
@@ -595,45 +620,78 @@ class FleetManager:
             [m for m in self.discovery.miners
              if m.is_online and not m.is_mining
              and not m.is_transitioning
-             and not m.is_wake_backed_off],
+             and not m.is_wake_backed_off
+             and m.id not in self._pending_wakes],
             key=lambda m: m.ip
         )
         transitioning_count = sum(1 for m in self.discovery.miners if m.is_transitioning)
         backed_off_count = sum(1 for m in self.discovery.miners if m.is_wake_backed_off)
         mining_count = len(mining_miners)
+        pending_wakes = self._count_pending_wakes()
         
-        if mining_count == 0:
-            logger.warning("Regulation: no mining miners, deferring to full activation")
+        # Clear pending wakes for miners now detected as mining
+        for m in mining_miners:
+            self._clear_pending_wake(m.id)
+        
+        # Use the EMA-calibrated per-miner estimate for regulation decisions.
+        per_miner_kw = self._actual_per_miner_kw
+        expected_pending_kw = pending_wakes * per_miner_kw
+        
+        if mining_count == 0 and pending_wakes > 0:
+            # Miners are waking but none detected yet — wait for boot
+            logger.info(
+                "Regulation: no mining detected yet, but wakes pending — waiting",
+                pending_wakes=pending_wakes,
+                expected_pending_kw=round(expected_pending_kw, 1),
+                target_kw=round(target_power_kw, 1),
+            )
+            return
+        
+        if mining_count == 0 and pending_wakes == 0:
+            logger.warning("Regulation: no mining miners and no pending wakes, deferring to full activation")
             self._last_regulation_was_rampup = True
             await self._activate_fleet_direct(target_power_kw)
             return
         
-        # Use the EMA-calibrated per-miner estimate for regulation decisions.
-        # During boot phases, mining_count can be much lower than actual miners
-        # consuming power (CGMiner port opens but hashrate=0). Using
-        # meter_power / detected_count would inflate per_miner_kw and cause
-        # under-correction. The EMA value from previous calibrations is stable.
-        per_miner_kw = self._actual_per_miner_kw
-        
         if actual_power_kw > target_power_kw:
             # === TRIM DOWN (instant) ===
+            # Include expected power from pending wakes that will push power higher
             excess_kw = actual_power_kw - target_power_kw
-            miners_to_trim = max(1, round(excess_kw / per_miner_kw))
+            total_excess_kw = excess_kw + expected_pending_kw
+            miners_to_trim = max(1, round(total_excess_kw / per_miner_kw))
             # Don't trim more than we have
             miners_to_trim = min(miners_to_trim, mining_count - 1)
+            
+            # Also cancel pending wakes if we have excess beyond detected miners
+            pending_to_cancel = 0
+            if pending_wakes > 0 and expected_pending_kw > 0:
+                pending_to_cancel = min(pending_wakes, round(expected_pending_kw / per_miner_kw))
             
             logger.info(
                 "Regulation: trimming excess miners (instant)",
                 actual_kw=round(actual_power_kw, 1),
                 target_kw=round(target_power_kw, 1),
-                excess_kw=round(excess_kw, 1),
+                excess_kw=round(actual_power_kw - target_power_kw, 1),
+                total_excess_kw=round(total_excess_kw, 1),
                 per_miner_kw=round(per_miner_kw, 3),
                 miners_to_trim=miners_to_trim,
-                mining_count=mining_count
+                pending_to_cancel=pending_to_cancel,
+                mining_count=mining_count,
+                pending_wakes=pending_wakes,
             )
             
             # Shut off the last N miners concurrently (by IP, deterministic order)
             miners_to_idle = mining_miners[-miners_to_trim:]
+            
+            # Also idle pending (not detected) miners to cancel their wake
+            if pending_to_cancel > 0:
+                pending_ids = list(self._pending_wakes.keys())[:pending_to_cancel]
+                for pid in pending_ids:
+                    pm = self.discovery.get_miner(pid)
+                    if pm and not pm.is_mining:
+                        miners_to_idle.append(pm)
+                        self._pending_wakes.pop(pid, None)
+            
             sem = asyncio.Semaphore(self._miner_command_concurrency)
             async def _idle(m):
                 async with sem:
@@ -658,14 +716,29 @@ class FleetManager:
             
         else:
             # === RAMP UP (slow — miners take ~2 min to boot) ===
-            deficit_kw = target_power_kw - actual_power_kw
+            # Account for pending wakes that haven't shown up yet
+            effective_power = actual_power_kw + expected_pending_kw
+            if effective_power >= target_power_kw * 0.95:
+                logger.info(
+                    "Regulation: enough miners pending, waiting for boot",
+                    actual_kw=round(actual_power_kw, 1),
+                    target_kw=round(target_power_kw, 1),
+                    pending_wakes=pending_wakes,
+                    expected_pending_kw=round(expected_pending_kw, 1),
+                    effective_power_kw=round(effective_power, 1),
+                )
+                return
+            
+            deficit_kw = target_power_kw - effective_power
             miners_to_wake = max(1, round(deficit_kw / per_miner_kw))
             # Add 1 extra for slight overshoot (trim is instant later)
-            # Don't over-add — regulation fine-tunes, not bulk-activates
             miners_to_wake = min(miners_to_wake + 1, len(idle_miners))
             
             if not idle_miners:
-                logger.info("Regulation: no idle miners to wake, at capacity")
+                logger.info(
+                    "Regulation: no idle miners to wake, at capacity",
+                    pending_wakes=pending_wakes,
+                )
                 return
             
             logger.info(
@@ -677,6 +750,7 @@ class FleetManager:
                 miners_to_wake=miners_to_wake,
                 idle_available=len(idle_miners),
                 transitioning=transitioning_count,
+                pending_wakes=pending_wakes,
                 backed_off=backed_off_count,
             )
             
@@ -688,18 +762,24 @@ class FleetManager:
                     return m, await self.discovery.set_miner_active(m.id)
             results = await asyncio.gather(*[_wake(m) for m in to_wake], return_exceptions=True)
             woken = 0
+            woken_ids = []
             for item in results:
                 if isinstance(item, Exception):
                     continue
                 m, (ok, msg) = item
                 if ok:
                     woken += 1
+                    woken_ids.append(m.id)
                 else:
                     logger.warning("Failed to wake miner", ip=m.ip, error=msg)
+            
+            # Record wakes at fleet level
+            self._record_wakes(woken_ids)
             
             logger.info(
                 "Regulation ramp-up commands sent",
                 woken=woken,
+                total_pending_wakes=self._count_pending_wakes(),
                 expected_power_kw=round(actual_power_kw + (woken * per_miner_kw), 1)
             )
             self._last_regulation_was_rampup = True
@@ -825,6 +905,8 @@ class FleetManager:
                 online_count += 1
                 if state.is_mining:
                     mining_count += 1
+                    # Clear from pending wakes since it's now detected as mining
+                    self._pending_wakes.pop(state.miner_id, None)
                     # Some miners don't report power; fall back to rated estimate
                     estimated_power_kw += state.power_kw if state.power_kw > 0 else state.rated_power_kw
                 else:
@@ -1392,8 +1474,12 @@ class FleetManager:
                     logger.warning("Failed to idle miner", ip=m.ip, error=msg)
         
         # Step 2: Wake additional miners as needed — CONCURRENTLY
+        # Exclude miners already pending wake (prevent redundant commands)
         miners_to_wake_list = []
-        sorted_wakeable = sorted(can_wake, key=lambda m: m.ip)
+        sorted_wakeable = sorted(
+            [m for m in can_wake if m.id not in self._pending_wakes],
+            key=lambda m: m.ip
+        )
         for miner in sorted_wakeable:
             if active_count + len(miners_to_wake_list) >= miners_needed:
                 break
@@ -1414,6 +1500,7 @@ class FleetManager:
                 async with sem:
                     return m, await self.discovery.set_miner_active(m.id)
             wake_results = await asyncio.gather(*[_wake_one(m) for m in miners_to_wake_list], return_exceptions=True)
+            woken_ids = []
             for item in wake_results:
                 if isinstance(item, Exception):
                     logger.warning("Exception waking miner", error=str(item))
@@ -1422,10 +1509,13 @@ class FleetManager:
                 if ok:
                     success_count += 1
                     active_count += 1
+                    woken_ids.append(m.id)
                     results.append(f"{m.ip}: ON (waking)")
                 else:
                     logger.warning("Failed to wake miner", ip=m.ip, error=msg)
                     results.append(f"{m.ip}: FAILED")
+            # Record wakes at fleet level for pending-wake tracking
+            self._record_wakes(woken_ids)
 
         # Step 4: If still short, log capacity shortfall
         if active_count < miners_needed:
@@ -1757,6 +1847,7 @@ class FleetManager:
         """Internal method to put fleet into idle mode."""
         try:
             self._status.state = FleetState.DEACTIVATING
+            self._pending_wakes.clear()  # Clear all pending wake tracking
             
             if self._use_direct_mode:
                 return await self._deactivate_fleet_direct()
