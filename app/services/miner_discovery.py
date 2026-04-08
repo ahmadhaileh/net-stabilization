@@ -182,8 +182,9 @@ class DiscoveredMiner:
     def record_wake_failure(self):
         """Record that a wake attempt did not result in mining."""
         self.consecutive_wake_failures += 1
-        # Exponential backoff: 2min, 4min, 8min, max 15min
-        backoff_seconds = min(120 * (2 ** (self.consecutive_wake_failures - 1)), 900)
+        # Soft backoff: 30s first failure (miner may still be booting),
+        # then escalate: 60s, 120s, max 300s.
+        backoff_seconds = min(30 * (2 ** (self.consecutive_wake_failures - 1)), 300)
         self._wake_backoff_until = datetime.utcnow() + timedelta(seconds=backoff_seconds)
     
     def clear_wake_failures(self):
@@ -1988,9 +1989,9 @@ class MinerDiscoveryService:
             logger.info("Waking miner from sleep mode", ip=miner.ip)
             
             # Mark that we're sending a wake command
-            # Full boot takes 80-130s: CGMiner port opens at ~40s but hashrate
-            # doesn't appear until 80-130s. Use 150s grace to cover full cycle.
-            miner.mark_command_sent('wake', grace_seconds=150)
+            # Simultaneous fleet boots (171 miners) take 3-5 min due to
+            # network congestion and staggered pool reconnects.
+            miner.mark_command_sent('wake', grace_seconds=300)
             
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
