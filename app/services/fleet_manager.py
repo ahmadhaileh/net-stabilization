@@ -1453,11 +1453,13 @@ class FleetManager:
         # OVERSHOOT strategy: turn on MORE miners than needed, then trim excess.
         # Rationale: turning miners OFF is instant (<1s), turning ON takes ~2 min.
         # Overshooting then trimming reaches target in ~3 min vs 15+ min incrementally.
-        # Boot failure rate is ~25% on mass-wake, so overshoot 25% to compensate.
+        # Keep overshoot moderate (10%) — too aggressive causes voltage-sag on
+        # mass-wake and *lowers* the boot-success rate (e.g. 57% at 171 vs 76%
+        # at 152 simultaneous wakes).  Regulation re-ramps after grace expiry.
         miners_to_wake = miners_needed - len(already_mining)
         if miners_to_wake > 5:
-            # Significant ramp-up: add 25% overshoot buffer (boot failure ~25%)
-            overshoot = max(3, int(miners_needed * 0.25))
+            # Significant ramp-up: add 10% overshoot buffer
+            overshoot = max(3, int(miners_needed * 0.10))
             miners_needed_buffered = min(miners_needed + overshoot, max_possible_miners)
             logger.info(
                 "Overshoot buffer applied for fast convergence",
