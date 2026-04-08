@@ -1550,6 +1550,12 @@ class FleetManager:
             wave1 = miners_to_wake_list[:_WAVE_SIZE]
             wave2 = miners_to_wake_list[_WAVE_SIZE:]
             
+            # Pre-record ALL planned wakes so regulation sees the full capacity
+            # and doesn't try to ramp up between waves.  Grace timer starts now
+            # for all miners (wave 2 effective grace = 180-45 = 135s, still OK).
+            all_planned_ids = [m.id for m in miners_to_wake_list]
+            self._record_wakes(all_planned_ids)
+            
             # Wave 1: immediate
             wake_results = await asyncio.gather(*[_wake_one(m) for m in wave1], return_exceptions=True)
             woken_ids = []
@@ -1566,7 +1572,6 @@ class FleetManager:
                 else:
                     logger.warning("Failed to wake miner", ip=m.ip, error=msg)
                     results.append(f"{m.ip}: FAILED")
-            self._record_wakes(woken_ids)
             
             # Wave 2: delayed background task to reduce inrush current
             if wave2:
@@ -1579,17 +1584,16 @@ class FleetManager:
                 async def _send_wave2():
                     await asyncio.sleep(_WAVE_DELAY_SECONDS)
                     w2_results = await asyncio.gather(*[_wake_one(m) for m in wave2], return_exceptions=True)
-                    w2_ids = []
+                    w2_sent = 0
                     for item in w2_results:
                         if isinstance(item, Exception):
                             continue
                         m, (ok, msg) = item
                         if ok:
-                            w2_ids.append(m.id)
-                    self._record_wakes(w2_ids)
+                            w2_sent += 1
                     logger.info(
                         "Wave 2 activation complete",
-                        commands_sent=len(w2_ids),
+                        commands_sent=w2_sent,
                         total_pending=len(self._pending_wakes),
                     )
                 asyncio.create_task(_send_wave2())
