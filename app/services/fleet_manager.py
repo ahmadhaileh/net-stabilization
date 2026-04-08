@@ -110,7 +110,7 @@ class FleetManager:
         self._regulation_tolerance_percent: float = 3.0  # Tolerate 3% deviation
         self._regulation_warmup_seconds: int = 30  # Wait 30s for first miners to report power
         self._regulation_cooldown_seconds: int = 15  # Trim-down cooldown (instant effect)
-        self._regulation_rampup_cooldown_seconds: int = 120  # Ramp-up cooldown (miners boot 80-130s)
+        self._regulation_rampup_cooldown_seconds: int = 90  # Ramp-up cooldown (miners boot 80-130s)
         self._miner_command_concurrency: int = 20  # Max concurrent wake/idle API calls
         self._last_activation_time: Optional[datetime] = None  # Track last activation
         self._last_regulation_adjustment_time: Optional[datetime] = None  # Track last adjustment
@@ -478,27 +478,25 @@ class FleetManager:
                         continue
                 
                 # Cooldown buffer: Skip if recent adjustment
-                # Use DIRECTION-BASED cooldown: the cooldown depends on what
-                # action is NEEDED now, not what was done last.
-                # Trim-down is instant → short cooldown (30s) is fine.
-                # Ramp-up is slow → long cooldown (90s) needed for miners to boot.
+                # Use BACKWARD-LOOKING cooldown: the cooldown depends on what
+                # action was LAST performed, not what is needed next.
+                # Trim-down is instant → short cooldown (15s) after a trim.
+                # Ramp-up is slow → long cooldown (90s) after a ramp-up.
+                # This prevents the pathological case where an over-trim drops
+                # power below target, but the forward-looking approach would
+                # then use the rampup cooldown (120s) to recover, blocking
+                # correction for 2 minutes.
                 if self._last_regulation_adjustment_time:
                     elapsed_since_adjustment = (datetime.utcnow() - self._last_regulation_adjustment_time).total_seconds()
                     
-                    # Determine what direction we'd need to go
-                    current_power = self._status.active_power_kw
-                    current_target = self._target_power_kw or 0
-                    needs_trim = current_power > current_target  # Power too high → trim
-                    
-                    # Trim-down always uses short cooldown (instant effect)
-                    # Ramp-up uses long cooldown (miners need boot time)
-                    cooldown = self._regulation_cooldown_seconds if needs_trim else self._regulation_rampup_cooldown_seconds
+                    # Cooldown based on what we DID last, not what we need next
+                    cooldown = self._regulation_rampup_cooldown_seconds if self._last_regulation_was_rampup else self._regulation_cooldown_seconds
                     if elapsed_since_adjustment < cooldown:
                         logger.debug(
                             "Regulation skipped - cooldown period",
                             elapsed_s=round(elapsed_since_adjustment),
                             cooldown_s=cooldown,
-                            direction="trim" if needs_trim else "rampup"
+                            last_action="rampup" if self._last_regulation_was_rampup else "trim"
                         )
                         continue
                 
@@ -655,25 +653,38 @@ class FleetManager:
         
         if actual_power_kw > target_power_kw:
             # === TRIM DOWN (instant) ===
-            # Include expected power from pending wakes that will push power higher
+            # Use miner-count-based approach: calculate how many miners we
+            # NEED to reach target, then remove the excess.  Cancel pending
+            # wakes first (cheap — they're still booting) before trimming
+            # actual mining miners.
             excess_kw = actual_power_kw - target_power_kw
-            total_excess_kw = excess_kw + expected_pending_kw
-            miners_to_trim = max(1, round(total_excess_kw / per_miner_kw))
-            # Don't trim more than we have
-            miners_to_trim = min(miners_to_trim, mining_count - 1)
+            miners_needed = max(1, round(target_power_kw / per_miner_kw))
+            effective_miners = mining_count + pending_wakes
+            excess_miners = max(0, effective_miners - miners_needed)
             
-            # Also cancel pending wakes if we have excess beyond detected miners
-            pending_to_cancel = 0
-            if pending_wakes > 0 and expected_pending_kw > 0:
-                pending_to_cancel = min(pending_wakes, round(expected_pending_kw / per_miner_kw))
+            # Cancel pending wakes first (cheaper than trimming active miners)
+            pending_to_cancel = min(pending_wakes, excess_miners)
+            remaining_excess = excess_miners - pending_to_cancel
+            
+            # Only trim actual miners if cancelling pending isn't enough
+            miners_to_trim = min(remaining_excess, mining_count - 1) if remaining_excess > 0 else 0
+            
+            # Fallback: if miner-count approach finds nothing to trim/cancel
+            # but actual kW is significantly above target, trim based on kW excess.
+            # This handles per_miner_kw estimation errors.
+            if miners_to_trim == 0 and pending_to_cancel == 0 and excess_kw >= per_miner_kw:
+                miners_to_trim = max(1, round(excess_kw / per_miner_kw))
+                miners_to_trim = min(miners_to_trim, mining_count - 1)
             
             logger.info(
                 "Regulation: trimming excess miners (instant)",
                 actual_kw=round(actual_power_kw, 1),
                 target_kw=round(target_power_kw, 1),
-                excess_kw=round(actual_power_kw - target_power_kw, 1),
-                total_excess_kw=round(total_excess_kw, 1),
+                excess_kw=round(excess_kw, 1),
                 per_miner_kw=round(per_miner_kw, 3),
+                miners_needed=miners_needed,
+                effective_miners=effective_miners,
+                excess_miners=excess_miners,
                 miners_to_trim=miners_to_trim,
                 pending_to_cancel=pending_to_cancel,
                 mining_count=mining_count,
@@ -681,7 +692,7 @@ class FleetManager:
             )
             
             # Shut off the last N miners concurrently (by IP, deterministic order)
-            miners_to_idle = mining_miners[-miners_to_trim:]
+            miners_to_idle = mining_miners[-miners_to_trim:] if miners_to_trim > 0 else []
             
             # Also idle pending (not detected) miners to cancel their wake
             if pending_to_cancel > 0:
