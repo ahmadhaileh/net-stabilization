@@ -120,7 +120,7 @@ class FleetManager:
         # Tracks miners whose wake commands were sent but haven't been detected
         # as mining yet.  Prevents regulation from over-waking.
         self._pending_wakes: Dict[str, datetime] = {}  # miner_id -> wake_time
-        self._wake_grace_seconds: int = 120  # How long to consider a wake "pending" (miners boot in 60-90s)
+        self._wake_grace_seconds: int = 300  # How long to consider a wake "pending" (miners boot in 60-90s, detection takes longer)
         
         # Manual override flag - load from DB
         self._manual_override = self.db.get_setting("manual_override", False)
@@ -739,32 +739,31 @@ class FleetManager:
             
         else:
             # === RAMP UP (slow — miners take ~2 min to boot) ===
-            # When a power meter is available, actual_power_kw already includes
-            # power from booting miners (even if they haven't been detected as
-            # "mining" yet).  Adding expected_pending_kw would double-count them
-            # and make regulation think we have way more power than we do.
-            # Only add pending estimates when there is NO meter.
-            if self.power_meter and actual_power_kw > 5.0:
-                # Meter is ground truth — don't add pending estimates on top
-                effective_power = actual_power_kw
-            else:
-                # No meter — use pending estimate as best guess
-                effective_power = actual_power_kw + expected_pending_kw
-            if effective_power >= target_power_kw * 0.95:
+            # Two checks:
+            # 1. If we already have enough pending wakes in the pipeline,
+            #    don't send more — wait for them to boot.  Use pending
+            #    estimates here because meter can't distinguish "booting"
+            #    from "not yet started".
+            # 2. For the actual deficit calculation, use meter as ground
+            #    truth (it already includes power from booting miners).
+            expected_total = actual_power_kw + expected_pending_kw
+            if pending_wakes > 0 and expected_total >= target_power_kw * 0.90:
                 logger.info(
                     "Regulation: enough miners pending, waiting for boot",
                     actual_kw=round(actual_power_kw, 1),
                     target_kw=round(target_power_kw, 1),
                     pending_wakes=pending_wakes,
                     expected_pending_kw=round(expected_pending_kw, 1),
-                    effective_power_kw=round(effective_power, 1),
+                    expected_total_kw=round(expected_total, 1),
                 )
                 return
             
-            deficit_kw = target_power_kw - effective_power
+            # Deficit based on meter (ground truth) minus what's already pending
+            deficit_kw = target_power_kw - expected_total
+            if deficit_kw <= 0:
+                return
             miners_to_wake = max(1, round(deficit_kw / per_miner_kw))
-            # Add 1 extra for slight overshoot (trim is instant later)
-            miners_to_wake = min(miners_to_wake + 1, len(idle_miners))
+            miners_to_wake = min(miners_to_wake, len(idle_miners))
             
             if not idle_miners:
                 logger.info(
