@@ -17,7 +17,7 @@ METER_URL = "http://192.168.95.4:8044"
 POLL_INTERVAL = 10   # seconds between status polls
 SMALL_TARGET = 25    # kW for quick sanity check
 FULL_TARGET = 194    # kW for full fleet
-CONVERGE_THRESHOLD = 0.90  # 90% of target = converged
+CONVERGE_THRESHOLD = 0.95  # 95% of target = converged
 MAX_WAIT = 360       # seconds before declaring failure
 IDLE_WAIT = 120      # seconds to wait for fleet to idle after deactivate
 

@@ -105,9 +105,9 @@ class FleetManager:
         # Deactivation in progress flag - stops all background loops from activating
         self._deactivation_in_progress: bool = False
         
-        # Power regulation settings — tuned for 4-minute convergence, 3% margin
+        # Power regulation settings — tuned for 4-minute convergence, 5% margin
         self._regulation_interval_seconds: int = 15  # Check power every 15 seconds
-        self._regulation_tolerance_percent: float = 3.0  # Tolerate 3% deviation
+        self._regulation_tolerance_percent: float = 5.0  # Tolerate 5% deviation
         self._regulation_warmup_seconds: int = 30  # Wait 30s for first miners to report power
         self._regulation_cooldown_seconds: int = 15  # Trim-down cooldown (instant effect)
         self._regulation_rampup_cooldown_seconds: int = 30  # Ramp-up cooldown (reduced: trust meter, re-check fast)
@@ -135,10 +135,11 @@ class FleetManager:
         # "on_off" = simple on/off per miner
         self._power_control_mode: str = self.db.get_setting("power_control_mode", "on_off")
         
-        # Meter-calibrated fleet metrics (updated from actual readings)
-        # These replace the miner self-reported values which overstate power.
-        # Initial values based on real-world measurements (87 × S9 fleet).
-        self._actual_per_miner_kw: float = 1.20  # Real avg from meter (vs 1.4 kW self-reported)
+        # Fixed per-miner kW for activation and regulation decisions.
+        # Miner self-reports vary wildly during boot (EMA drifts to 1.5+ kW
+        # when few miners detected but meter shows high power).  Use a fixed
+        # conservative value that matches real S9 consumption.
+        self._actual_per_miner_kw: float = 1.40  # Fixed: don't use EMA (unreliable during boot)
         self._plant_overhead_kw: float = 6.0     # Non-miner plant consumption (cooling, network, etc.)
         self._meter_calibration_count: int = 0    # How many meter samples we've collected
 
@@ -747,7 +748,7 @@ class FleetManager:
             # 2. For the actual deficit calculation, use meter as ground
             #    truth (it already includes power from booting miners).
             expected_total = actual_power_kw + expected_pending_kw
-            if pending_wakes > 0 and expected_total >= target_power_kw * 0.90:
+            if pending_wakes > 0 and expected_total >= target_power_kw * 0.95:
                 logger.info(
                     "Regulation: enough miners pending, waiting for boot",
                     actual_kw=round(actual_power_kw, 1),
@@ -995,14 +996,12 @@ class FleetManager:
                     # Clamp input before feeding into EMA
                     measured_per_miner = max(_MIN_PER_MINER_KW, min(_MAX_PER_MINER_KW, measured_per_miner))
 
-                    alpha = 0.1 if self._meter_calibration_count > 10 else 0.3  # Learn faster initially
-                    self._actual_per_miner_kw = (
-                        (1 - alpha) * self._actual_per_miner_kw + alpha * measured_per_miner
-                    )
-                    # Clamp output as final safety net
-                    self._actual_per_miner_kw = max(_MIN_PER_MINER_KW, min(_MAX_PER_MINER_KW, self._actual_per_miner_kw))
+                    # DON'T update _actual_per_miner_kw via EMA.
+                    # During boot, mining_count is small while meter is high → EMA
+                    # spikes to 1.6 kW, making rated_power jump and regulation confused.
+                    # Use fixed 1.4 kW for all decisions.  Only update overhead + log.
                     self._plant_overhead_kw = (
-                        (1 - alpha) * self._plant_overhead_kw + alpha * max(0, measured_overhead)
+                        (1 - 0.1) * self._plant_overhead_kw + 0.1 * max(0, measured_overhead)
                     )
                     self._meter_calibration_count += 1
                     
@@ -1010,6 +1009,7 @@ class FleetManager:
                         logger.info(
                             "Meter-calibrated fleet metrics",
                             per_miner_kw=round(self._actual_per_miner_kw, 3),
+                            measured_per_miner_kw=round(measured_per_miner, 3),
                             plant_overhead_kw=round(self._plant_overhead_kw, 2),
                             samples=self._meter_calibration_count,
                         )
