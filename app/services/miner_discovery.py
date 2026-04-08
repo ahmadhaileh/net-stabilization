@@ -2059,7 +2059,10 @@ class MinerDiscoveryService:
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
             if await vnish.set_sleep_mode(enable=False):
-                miner.power_mode = MinerPowerMode.NORMAL
+                # DON'T set power_mode to NORMAL yet — leave as IDLE so the fast-path
+                # Vnish poll is used during boot. CGMiner port 4028 won't respond for
+                # 60-90s, and hitting it wastes 5s per miner per poll cycle.
+                # power_mode gets set to NORMAL once Vnish detects hashrate > 0.
                 # Don't set is_mining=True yet - will be confirmed on next status update
                 logger.info("Miner wake command sent - will take 45-60s to resume", ip=miner.ip)
                 return True, "Wake command sent - miner resuming (takes ~45-60s)"
