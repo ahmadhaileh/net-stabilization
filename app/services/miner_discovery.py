@@ -2053,9 +2053,10 @@ class MinerDiscoveryService:
             logger.info("Waking miner from sleep mode", ip=miner.ip)
             
             # Mark that we're sending a wake command
-            # Miners boot in 60-90s but detection via CGMiner port can take
-            # much longer with 171 miners.  300s grace matches fleet-level.
-            miner.mark_command_sent('wake', grace_seconds=300)
+            # Miners boot in 60-90s, detection via CGMiner takes ~30s more.
+            # 180s grace matches fleet-level _wake_grace_seconds.
+            # Shorter = failed-boot miners return to idle pool sooner for re-wake.
+            miner.mark_command_sent('wake', grace_seconds=180)
             
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping

@@ -18,7 +18,7 @@ POLL_INTERVAL = 10   # seconds between status polls
 SMALL_TARGET = 25    # kW for quick sanity check
 FULL_TARGET = 194    # kW for full fleet
 CONVERGE_THRESHOLD = 0.95  # 95% of target = converged
-MAX_WAIT = 360       # seconds before declaring failure
+MAX_WAIT = 420       # seconds before declaring failure (two wave strategy: 180s grace + 90s second boot)
 IDLE_WAIT = 120      # seconds to wait for fleet to idle after deactivate
 
 
