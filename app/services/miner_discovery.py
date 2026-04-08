@@ -1940,72 +1940,45 @@ class MinerDiscoveryService:
     
     async def _disable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Put miner into idle mode using Vnish sleep mode API.
+        Stop miner using stop_bmminer.cgi (most reliable method).
         
-        This uses the do_sleep_mode.cgi endpoint which is the safest way
-        to pause mining - it preserves all config and pools.
-        
-        NO fallback to CGMiner API pool manipulation - that breaks configs!
+        This directly stops the cgminer process.
         """
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            logger.info("Setting miner to sleep mode", ip=miner.ip)
-            
-            # Mark that we're sending a command - miner may fluctuate for ~30s
-            miner.mark_command_sent('sleep', grace_seconds=45)
-            
-            # Use sleep mode API directly - don't check is_vnish_available
-            # because that might fail if CGMiner is already in a weird state
-            if await vnish.set_sleep_mode(enable=True):
+            if await vnish.stop_cgminer():
                 miner.power_mode = MinerPowerMode.IDLE
                 miner.is_mining = False
                 miner.hashrate_ghs = 0
-                logger.info("Miner entered sleep mode", ip=miner.ip)
-                return True, "Miner entered sleep mode"
+                return True, "Miner stopped"
             else:
-                logger.warning("Sleep mode command failed", ip=miner.ip)
-                return False, "Failed to set sleep mode"
+                logger.warning("Stop command failed", ip=miner.ip)
+                return False, "Failed to stop miner"
                 
         except Exception as e:
-            logger.error("Failed to set sleep mode", ip=miner.ip, error=str(e))
+            logger.error("Failed to stop miner", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def _enable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Wake miner from sleep mode using Vnish sleep mode API.
+        Wake miner using do_sleep_mode.cgi mode=0 (idempotent).
         
-        This uses the do_sleep_mode.cgi endpoint with mode=0 which
-        wakes the miner and resumes mining.
-        
-        NOTE: Waking takes 45-60 seconds. During this time:
-        - Miner may appear offline briefly
-        - Then idle again
-        - Then finally mining
+        Safe to call on already-mining miners — it's a no-op.
+        No grace periods, no state tracking — just send the command.
         """
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            logger.info("Waking miner from sleep mode", ip=miner.ip)
-            
-            # Mark that we're sending a wake command
-            # Simultaneous fleet boots (171 miners) take 3-5 min due to
-            # network congestion and staggered pool reconnects.
-            miner.mark_command_sent('wake', grace_seconds=120)
-            
-            # Use sleep mode API directly to wake - don't check is_vnish_available
-            # because that calls get_system_info which might fail when sleeping
             if await vnish.set_sleep_mode(enable=False):
                 miner.power_mode = MinerPowerMode.NORMAL
-                # Don't set is_mining=True yet - will be confirmed on next status update
-                logger.info("Miner wake command sent - will take 45-60s to resume", ip=miner.ip)
-                return True, "Wake command sent - miner resuming (takes ~45-60s)"
+                return True, "Wake command sent"
             else:
-                logger.warning("Wake from sleep command failed", ip=miner.ip)
-                return False, "Failed to wake from sleep"
+                logger.warning("Wake command failed", ip=miner.ip)
+                return False, "Failed to wake miner"
                 
         except Exception as e:
-            logger.error("Failed to wake from sleep", ip=miner.ip, error=str(e))
+            logger.error("Failed to wake miner", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def set_miner_frequency(
