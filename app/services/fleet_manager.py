@@ -608,11 +608,12 @@ class FleetManager:
             await self._activate_fleet_direct(target_power_kw)
             return
         
-        # Use MINER-ONLY power for per-miner estimate (not plant power).
-        # actual_power_kw is plant total (includes ~6 kW overhead), which would
-        # inflate the per-miner estimate and cause under-correction.
-        miners_only_kw = self._status.measured_power_kw or actual_power_kw
-        per_miner_kw = miners_only_kw / mining_count
+        # Use the EMA-calibrated per-miner estimate for regulation decisions.
+        # During boot phases, mining_count can be much lower than actual miners
+        # consuming power (CGMiner port opens but hashrate=0). Using
+        # meter_power / detected_count would inflate per_miner_kw and cause
+        # under-correction. The EMA value from previous calibrations is stable.
+        per_miner_kw = self._actual_per_miner_kw
         
         if actual_power_kw > target_power_kw:
             # === TRIM DOWN (instant) ===

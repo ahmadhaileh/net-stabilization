@@ -1484,6 +1484,22 @@ class MinerDiscoveryService:
             except Exception:
                 pass
             
+            # Boot-phase detection: CGMiner port is open but hashrate=0.
+            # If we recently sent a wake command, the miner is still booting —
+            # chips are initializing and consuming power but haven't reported
+            # hashrate yet. Keep the transition grace active so regulation
+            # doesn't treat this miner as idle.
+            if (not miner.is_mining
+                    and miner.last_command_type == 'wake'
+                    and miner.last_command_time
+                    and miner.is_transitioning):
+                logger.info(
+                    "Miner booting: CGMiner open but hashrate=0, keeping transition",
+                    ip=miner.ip,
+                    elapsed_s=round((datetime.utcnow() - miner.last_command_time).total_seconds()),
+                    grace_s=miner.transition_grace_seconds,
+                )
+            
             # Track wake success: miner is hashing → clear any wake failure backoff
             if miner.is_mining and miner.consecutive_wake_failures > 0:
                 logger.info(
@@ -1516,7 +1532,7 @@ class MinerDiscoveryService:
             # Key insight: during boot, CGMiner port 4028 takes 80-130s to open,
             # but the Vnish web API (port 80) responds immediately and can report
             # whether cgminer is actually running and mining.
-            logger.debug("CGMiner API not responding, trying Vnish Web API", ip=miner.ip)
+            logger.info("CGMiner port closed, checking Vnish Web API", ip=miner.ip)
             
             vnish = VnishWebAPI(miner.ip)
             try:
@@ -1983,8 +1999,9 @@ class MinerDiscoveryService:
             logger.info("Waking miner from sleep mode", ip=miner.ip)
             
             # Mark that we're sending a wake command
-            # Waking takes 45-60s, during which the miner status will fluctuate
-            miner.mark_command_sent('wake', grace_seconds=75)
+            # Full boot takes 80-130s: CGMiner port opens at ~40s but hashrate
+            # doesn't appear until 80-130s. Use 150s grace to cover full cycle.
+            miner.mark_command_sent('wake', grace_seconds=150)
             
             # Use sleep mode API directly to wake - don't check is_vnish_available
             # because that calls get_system_info which might fail when sleeping
