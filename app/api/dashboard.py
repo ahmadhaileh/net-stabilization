@@ -46,6 +46,7 @@ class FleetStatusResponse(BaseModel):
     last_ems_command: Optional[datetime]
     errors: List[str]
     power_control_mode: str = "on_off"  # "frequency" or "on_off"
+    dev_mode: bool = False
 
 
 class MinerStatusResponse(BaseModel):
@@ -119,7 +120,8 @@ async def get_fleet_status():
         last_update=s.last_update,
         last_ems_command=s.last_ems_command,
         errors=s.errors,
-        power_control_mode=fleet_manager.power_control_mode
+        power_control_mode=fleet_manager.power_control_mode,
+        dev_mode=fleet_manager._dev_mode
     )
 
 
@@ -305,6 +307,16 @@ async def control_miner(miner_id: str, request: ManualControlRequest):
         miner_id=miner_id,
         action=request.action,
         success=success
+    )
+    
+    # Log to fleet manager command history so it shows in dashboard
+    fleet_manager = get_fleet_manager()
+    fleet_manager._log_command(
+        source="dashboard",
+        command=f"miner_{request.action}",
+        parameters={"miner_id": miner_id},
+        success=success,
+        message=msg if settings.miner_discovery_enabled else None
     )
     
     return {
@@ -2204,5 +2216,78 @@ async def toggle_dev_mode(enabled: bool = True):
     fleet_manager._dev_mode = enabled
     state = "ON" if enabled else "OFF"
     logger.info(f"Dev mode {state}")
+    
+    # Log to command history
+    fleet_manager._log_command(
+        source="dashboard",
+        command="dev_mode",
+        parameters={"enabled": enabled},
+        success=True,
+        message=f"Dev mode {state}"
+    )
+    
     return {"success": True, "dev_mode": enabled, "message": f"Dev mode {state}"}
+
+
+# =========================================================================
+# Section Test API (for diagnostic wake tests)
+# =========================================================================
+
+# In-memory storage for section test state
+_section_test_state = {
+    "running": False,
+    "sections": [],         # [{id, miners: [ip,...], status, mining_count, failed: [ip,...], started_at, finished_at}]
+    "current_section": None,
+    "started_at": None,
+}
+
+
+@router.get(
+    "/section_test",
+    summary="Get section test status"
+)
+async def get_section_test():
+    """Get the current state of the section wake test."""
+    return _section_test_state
+
+
+@router.post(
+    "/section_test",
+    summary="Update section test state from diagnostic script"
+)
+async def update_section_test(data: dict):
+    """Update section test state. Called by the diagnostic script."""
+    global _section_test_state
+    for key in ("running", "sections", "current_section", "started_at"):
+        if key in data:
+            _section_test_state[key] = data[key]
+    
+    # Log section events to command history
+    fleet_manager = get_fleet_manager()
+    if "current_section" in data and data.get("current_section") is not None:
+        fleet_manager._log_command(
+            source="diagnostic",
+            command="section_test",
+            parameters={"section": data["current_section"]},
+            success=True,
+            message=f"Testing section {data['current_section']}"
+        )
+    
+    return {"success": True}
+
+
+@router.delete(
+    "/section_test",
+    summary="Clear section test state"
+)
+async def clear_section_test():
+    """Clear the section test state."""
+    global _section_test_state
+    _section_test_state = {
+        "running": False,
+        "sections": [],
+        "current_section": None,
+        "started_at": None,
+    }
+    return {"success": True}
 

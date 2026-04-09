@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Grid Stabilization - Mining Fleet Control</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/style.css?v=7">
+  <link rel="stylesheet" href="/static/css/style.css?v=8">
   <!-- Chart.js Date Adapter -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -53,6 +53,7 @@
         <span id="status-dot" class="status-dot"></span>
         <span id="connection-status">Connecting...</span>
       </div>
+      <div id="dev-mode-badge" class="dev-mode-badge hidden">DEV MODE</div>
       <div class="header-stat last-update-stat">
         <span class="stat-label">Updated</span>
         <span class="stat-value" id="last-updated">--</span>
@@ -226,6 +227,10 @@
             <span class="ems-label">Last EMS Command</span>
             <span id="ems-last-cmd" class="ems-value">--</span>
           </div>
+          <div class="ems-item">
+            <span class="ems-label">Regulation Timer</span>
+            <span id="ems-timer" class="ems-value ems-timer">--:--</span>
+          </div>
         </div>
         <div class="ems-endpoint">
           <code>GET /api/status</code>
@@ -234,6 +239,27 @@
         </div>
       </section>
     </div>
+
+    <!-- Section Test Card (diagnostic wake tests) -->
+    <section id="section-test-card" class="section-test-card hidden">
+      <div class="section-header">
+        <h2>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4"/>
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          Section Wake Test
+        </h2>
+        <span id="section-test-status" class="section-test-badge">IDLE</span>
+      </div>
+      <div id="section-test-grid" class="section-test-grid">
+        <div class="section-test-empty">No test running. Start a diagnostic test from the server.</div>
+      </div>
+      <div id="section-test-failed" class="section-test-failed hidden">
+        <strong>Failed miners:</strong>
+        <span id="section-test-failed-list"></span>
+      </div>
+    </section>
 
     <!-- Historical Graphs Section - Now above Fleet Control -->
     <section class="graphs-section">

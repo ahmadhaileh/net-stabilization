@@ -78,11 +78,13 @@ function setupEventListeners() {
 // =========================================================================
 
 async function startPolling() {
-    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchHistory()]);
+    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchHistory(), fetchSectionTest()]);
 
     setInterval(fetchStatus, CONFIG.pollInterval);
     setInterval(fetchDiscoveredMiners, CONFIG.pollInterval);
     setInterval(fetchHistory, 10000);
+    setInterval(fetchSectionTest, CONFIG.pollInterval);
+    setInterval(updateRegulationTimer, 1000);
 }
 
 async function fetchStatus() {
@@ -148,6 +150,93 @@ async function fetchHistory() {
         }
     } catch (error) {
         console.error('Failed to fetch history:', error);
+    }
+}
+
+// Section test polling
+let sectionTestState = { running: false, sections: [], current_section: null, started_at: null };
+
+async function fetchSectionTest() {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/section_test`);
+        if (response.ok) {
+            sectionTestState = await response.json();
+            updateSectionTestDisplay();
+        }
+    } catch (error) { /* ignore */ }
+}
+
+// ── Regulation Timer state ──
+let timerState = {
+    activationTime: null,   // when the last activate command was received
+    targetReachedTime: null, // when power first reached target within tolerance
+    stable: false,
+};
+
+function updateRegulationTimer() {
+    const timerEl = $('ems-timer');
+    if (!timerEl) return;
+
+    const s = state.status;
+    if (!s) { timerEl.textContent = '--:--'; return; }
+
+    // Detect activation: we have a target and state is RUNNING or ACTIVATING
+    const isActive = s.target_power_kw && s.target_power_kw > 0 &&
+        (s.state === 'running' || s.state === 'activating');
+
+    if (!isActive) {
+        timerEl.textContent = '--:--';
+        timerEl.className = 'ems-value ems-timer timer-idle';
+        timerState.activationTime = null;
+        timerState.targetReachedTime = null;
+        timerState.stable = false;
+        return;
+    }
+
+    // Track activation time from last_ems_command
+    if (s.last_ems_command && (!timerState.activationTime || new Date(s.last_ems_command) > timerState.activationTime)) {
+        timerState.activationTime = new Date(s.last_ems_command);
+        timerState.targetReachedTime = null;
+        timerState.stable = false;
+    }
+
+    if (!timerState.activationTime) return;
+
+    // Check if power is within 5% tolerance of target
+    const currentPower = s.active_power_kw || 0;
+    const target = s.target_power_kw;
+    const withinTolerance = Math.abs(currentPower - target) <= target * 0.05;
+
+    if (withinTolerance && !timerState.targetReachedTime) {
+        timerState.targetReachedTime = new Date();
+        timerState.stable = true;
+    } else if (!withinTolerance) {
+        timerState.targetReachedTime = null;
+        timerState.stable = false;
+    }
+
+    // Calculate elapsed from activation
+    const elapsed = Math.floor((Date.now() - timerState.activationTime.getTime()) / 1000);
+    const maxTime = 300; // 5 minutes
+    const remaining = Math.max(0, maxTime - elapsed);
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+
+    if (remaining <= 0) {
+        // Timer expired
+        if (timerState.stable) {
+            timerEl.textContent = '✓ STABLE';
+            timerEl.className = 'ems-value ems-timer timer-green';
+        } else {
+            timerEl.textContent = '✗ TIMEOUT';
+            timerEl.className = 'ems-value ems-timer timer-red';
+        }
+    } else if (timerState.stable) {
+        timerEl.textContent = `✓ ${min}:${sec.toString().padStart(2, '0')}`;
+        timerEl.className = 'ems-value ems-timer timer-green';
+    } else {
+        timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+        timerEl.className = 'ems-value ems-timer timer-red';
     }
 }
 
@@ -312,8 +401,23 @@ function updateStatusDisplay() {
     const runningStatuses = { 0: 'STANDBY', 1: 'STANDBY', 2: 'RUNNING' };
     $('ems-running').textContent = runningStatuses[state.status.running_status] || 'STANDBY';
 
-    if (state.status.last_ems_command) {
+    // Last EMS command — show latest from history if available, else fall back to timestamp
+    if (state.history && state.history.length > 0) {
+        const latest = state.history[0]; // history is newest-first
+        const t = new Date(latest.timestamp).toLocaleTimeString();
+        $('ems-last-cmd').textContent = `${latest.source.toUpperCase()}: ${latest.command} (${t})`;
+    } else if (state.status.last_ems_command) {
         $('ems-last-cmd').textContent = new Date(state.status.last_ems_command).toLocaleString();
+    }
+
+    // Dev mode badge
+    const devBadge = $('dev-mode-badge');
+    if (devBadge) {
+        if (state.status.dev_mode) {
+            devBadge.classList.remove('hidden');
+        } else {
+            devBadge.classList.add('hidden');
+        }
     }
 
     // Override badge
@@ -833,6 +937,76 @@ function updateHistoryDisplay() {
         `;
         })
         .join('');
+}
+
+// ── Section Test Display ──
+function updateSectionTestDisplay() {
+    const card = $('section-test-card');
+    const grid = $('section-test-grid');
+    const badge = $('section-test-status');
+    const failedDiv = $('section-test-failed');
+    const failedList = $('section-test-failed-list');
+    if (!card || !grid) return;
+
+    const st = sectionTestState;
+    if (!st.sections || st.sections.length === 0) {
+        card.classList.add('hidden');
+        return;
+    }
+
+    card.classList.remove('hidden');
+
+    // Status badge
+    if (st.running) {
+        badge.textContent = 'RUNNING';
+        badge.className = 'section-test-badge running';
+    } else {
+        badge.textContent = 'DONE';
+        badge.className = 'section-test-badge done';
+    }
+
+    // Render each section
+    grid.innerHTML = st.sections.map((sec) => {
+        const total = sec.miners ? sec.miners.length : 0;
+        const mining = sec.mining_count || 0;
+        const failed = sec.failed || [];
+        const pct = total > 0 ? Math.round((mining / total) * 100) : 0;
+
+        let statusClass = 'waiting';
+        let statusText = 'Waiting';
+        if (sec.status === 'testing') { statusClass = 'testing'; statusText = 'Testing'; }
+        else if (sec.status === 'done') {
+            if (failed.length === 0) { statusClass = 'passed'; statusText = `${pct}% ✓`; }
+            else { statusClass = 'failed'; statusText = `${pct}% (${failed.length} failed)`; }
+        }
+
+        const ipRange = total > 0 ? `${sec.miners[0]} — ${sec.miners[total - 1]}` : '';
+
+        return `
+            <div class="section-item ${statusClass}">
+                <div class="section-item-header">
+                    <span class="section-item-title">Section ${sec.id}</span>
+                    <span class="section-item-status ${statusClass}">${statusText}</span>
+                </div>
+                <div class="section-item-progress">
+                    <span>${mining}/${total} mining</span>
+                    <span>${ipRange}</span>
+                </div>
+                <div class="section-item-bar">
+                    <div class="section-item-bar-fill" style="width: ${pct}%"></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Collect all failed miners across all sections
+    const allFailed = st.sections.flatMap(s => s.failed || []);
+    if (allFailed.length > 0) {
+        failedDiv.classList.remove('hidden');
+        failedList.textContent = allFailed.join(', ');
+    } else {
+        failedDiv.classList.add('hidden');
+    }
 }
 
 // =========================================================================
