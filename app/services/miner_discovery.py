@@ -1054,7 +1054,10 @@ class MinerDiscoveryService:
                         remaining=len(self._waking_miners))
     
     async def _poke_one(self, ip: str) -> bool:
-        """Send a single HTTP poke to stimulate firmware wake."""
+        """Send a single HTTP poke to stimulate firmware wake.
+        
+        Returns True if we got an HTTP response (web server alive).
+        """
         if self._poke_client is None:
             return False
         url = f"http://{ip}/cgi-bin/get_miner_status.cgi"
@@ -1065,26 +1068,26 @@ class MinerDiscoveryService:
         except Exception:
             return False
     
-    async def _rewake_one(self, ip: str) -> bool:
-        """Re-send wake command for a miner that hasn't booted yet."""
+    async def _force_start_cgminer(self, ip: str) -> bool:
+        """Send reboot_cgminer.cgi to directly start CGMiner."""
         if self._poke_client is None:
             return False
-        url = f"http://{ip}/cgi-bin/do_sleep_mode.cgi"
+        url = f"http://{ip}/cgi-bin/reboot_cgminer.cgi"
         auth = httpx.DigestAuth(self._vnish_username, self._vnish_password)
         try:
-            resp = await self._poke_client.post(
-                url, auth=auth,
-                data={"mode": "0"},
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10.0
-            )
+            resp = await self._poke_client.get(url, auth=auth, timeout=10.0)
             return resp.status_code == 200
+        except httpx.TimeoutException:
+            # Timeout is expected — reboot_cgminer blocks until cgminer starts
+            return True
         except Exception:
             return False
     
     async def _poke_loop(self):
         """Background loop that pokes all waking miners to stimulate boot."""
         logger.info("Poke loop running")
+        force_started: set = set()  # IPs that already got reboot_cgminer
+        poke_success_count: Dict[str, int] = {}  # ip -> count of successful pokes
         
         while True:
             try:
@@ -1095,6 +1098,7 @@ class MinerDiscoveryService:
                 now = datetime.utcnow()
                 expired = []
                 poke_targets = []
+                force_start_targets = []
                 
                 for ip, wake_time in list(self._waking_miners.items()):
                     elapsed = (now - wake_time).total_seconds()
@@ -1104,24 +1108,47 @@ class MinerDiscoveryService:
                         continue
                     
                     poke_targets.append(ip)
+                    
+                    # After 120s: if we've had >=10 successful pokes (web is up)
+                    # but CGMiner still hasn't started, force-start it
+                    if (elapsed > 120.0
+                            and ip not in force_started
+                            and poke_success_count.get(ip, 0) >= 10):
+                        force_start_targets.append(ip)
                 
                 # Remove expired miners
                 for ip in expired:
                     logger.warning("Miner failed to boot after poke timeout",
                                    ip=ip, timeout_s=self._poke_give_up_after)
                     del self._waking_miners[ip]
+                    poke_success_count.pop(ip, None)
+                    force_started.discard(ip)
                 
                 if not poke_targets:
                     await asyncio.sleep(self._poke_interval)
                     continue
                 
+                # Force-start CGMiner on miners with responsive web but no CGMiner
+                if force_start_targets:
+                    fs_tasks = [self._force_start_cgminer(ip) for ip in force_start_targets]
+                    results = await asyncio.gather(*fs_tasks, return_exceptions=True)
+                    for ip, result in zip(force_start_targets, results):
+                        force_started.add(ip)
+                        ok = isinstance(result, bool) and result
+                        logger.info("Force-started CGMiner via reboot_cgminer",
+                                    ip=ip, success=ok)
+                
                 # Poke all waking miners concurrently
                 poke_tasks = [self._poke_one(ip) for ip in poke_targets]
-                await asyncio.gather(*poke_tasks, return_exceptions=True)
+                results = await asyncio.gather(*poke_tasks, return_exceptions=True)
+                for ip, result in zip(poke_targets, results):
+                    if isinstance(result, bool) and result:
+                        poke_success_count[ip] = poke_success_count.get(ip, 0) + 1
                 
                 if len(poke_targets) >= 5:
                     logger.info("Poke round complete",
-                                poked=len(poke_targets))
+                                poked=len(poke_targets),
+                                force_starts=len(force_start_targets))
                 
             except asyncio.CancelledError:
                 raise
