@@ -276,6 +276,9 @@ def main():
                         help="Comma-separated IPs to test (default: all)")
     parser.add_argument("--section", type=int, default=None,
                         help="Test only this section number (1-based). Sleeps all others first.")
+    parser.add_argument("--sections", type=str, default=None,
+                        help="Test multiple sections together (comma-sep, e.g. '1,2,3'). "
+                             "Wakes all at once to find the capacity cliff.")
     parser.add_argument("--keep-running", action="store_true", default=True,
                         help="Leave all miners running at the end (default: true)")
     parser.add_argument("--sleep-after", action="store_true", default=False,
@@ -306,8 +309,17 @@ def main():
     miners_per = len(sections[0]) if sections else 0
     print(f"Sections: {len(sections)} × ~{miners_per} miners "
           f"(~{args.section_kw:.0f} kW each)")
+    # Parse --sections into a set for marker display
+    _selected_sections = set()
+    if args.sections:
+        _selected_sections = {int(x) for x in args.sections.split(",")}
+    
     for i, sec in enumerate(sections):
-        marker = " ◀" if args.section == i + 1 else ""
+        marker = ""
+        if args.section == i + 1:
+            marker = " ◀"
+        elif (i + 1) in _selected_sections:
+            marker = " ◀"
         print(f"  Section {i+1}: {sec[0]} – {sec[-1]} ({len(sec)} miners){marker}")
 
     # If --section N, test only that one section in isolation
@@ -352,6 +364,87 @@ def main():
             sleep_miners(target_section, "cleanup")
         else:
             print(f"\nSection {args.section} miners LEFT RUNNING")
+        return
+
+    # If --sections 1,2,3, test those sections combined (all at once)
+    if args.sections is not None:
+        sec_nums = sorted(int(x) for x in args.sections.split(","))
+        for n in sec_nums:
+            if n < 1 or n > len(sections):
+                print(f"ERROR: Section {n} does not exist (1-{len(sections)})")
+                sys.exit(1)
+        
+        combined_ips = []
+        for n in sec_nums:
+            combined_ips.extend(sections[n - 1])
+        total_miners = len(combined_ips)
+        expected_kw = total_miners * KW_PER_MINER
+        
+        label = ",".join(str(n) for n in sec_nums)
+        print(f"\n{'='*60}")
+        print(f"  COMBINED SECTION TEST: Sections [{label}]")
+        print(f"  {total_miners} miners, ~{expected_kw:.0f} kW expected")
+        print(f"  Range: {combined_ips[0]} – {combined_ips[-1]}")
+        print(f"{'='*60}")
+
+        # Sleep ALL miners for a clean test
+        sleep_miners(ips, "all")
+        time.sleep(5)
+        print(f"  Baseline meter: {get_meter_kw():.1f} kW\n")
+
+        # Build dashboard state — one entry per selected section
+        selected_sections = [sections[n - 1] for n in sec_nums]
+        dash_sections = build_dashboard_sections(selected_sections)
+        push_dashboard_state(dash_sections, running=True, current=None)
+
+        # Test each section sequentially (wake section, wait, then next)
+        all_results = {}
+        already_running = []
+        for idx, n in enumerate(sec_nums):
+            sec_ips = sections[n - 1]
+            results = test_section(sec_ips, idx + 1, len(sec_nums), already_running,
+                                   dash_sections=dash_sections)
+            all_results.update(results)
+            newly_running = [ip for ip, ok in results.items() if ok]
+            already_running.extend(newly_running)
+            if idx < len(sec_nums) - 1:
+                print(f"\n  Pausing 15s before next section ...")
+                time.sleep(15)
+
+        push_dashboard_state(dash_sections, running=False, current=None)
+
+        # Summary
+        passed = sum(1 for v in all_results.values() if v)
+        failed = total_miners - passed
+        failed_ips = sorted((ip for ip, ok in all_results.items() if not ok), key=ip_sort_key)
+
+        print(f"\n{'='*60}")
+        print(f"  COMBINED RESULT: Sections [{label}]")
+        print(f"  {passed}/{total_miners} ({passed/total_miners*100:.0f}%)")
+        print(f"{'='*60}")
+        
+        # Per-section breakdown
+        print(f"  {'Sec':>4} | {'Range':>33} | {'Size':>5} | {'Pass':>5} | {'Rate':>6}")
+        print(f"  {'-'*4}-+-{'-'*33}-+-{'-'*5}-+-{'-'*5}-+-{'-'*6}")
+        for n in sec_nums:
+            sec_ips = sections[n - 1]
+            sec_pass = sum(1 for ip in sec_ips if all_results.get(ip, False))
+            sec_n = len(sec_ips)
+            rate = f"{sec_pass/sec_n*100:.0f}%"
+            rng = f"{sec_ips[0]} – {sec_ips[-1]}"
+            print(f"  {n:>4} | {rng:>33} | {sec_n:>5} | {sec_pass:>5} | {rate:>6}")
+
+        if failed_ips:
+            print(f"\n  Failed miners ({len(failed_ips)}):")
+            for ip in failed_ips:
+                print(f"    ✗ {ip}")
+        else:
+            print(f"\n  All miners passed ✓")
+
+        if args.sleep_after:
+            sleep_miners(combined_ips, "cleanup")
+        else:
+            print(f"\nAll tested miners LEFT RUNNING")
         return
 
     # Build dashboard section state
