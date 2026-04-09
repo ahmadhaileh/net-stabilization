@@ -130,6 +130,11 @@ class FleetManager:
         # tests don't get interfered with by the server.
         self._dev_mode: bool = False
         
+        # Active sections: when set, only miners in these IPs participate
+        # in fleet operations.  All others are put to sleep and kept asleep.
+        # None = all miners active (default).
+        self._active_section_ips: Optional[set] = None
+        
         # Power control mode - load from DB (defaults to on_off)
         # "frequency" = fine-grained frequency scaling
         # "on_off" = simple on/off per miner
@@ -178,6 +183,27 @@ class FleetManager:
     def config(self) -> SystemConfig:
         """Get current system configuration."""
         return self._config
+    
+    def is_miner_in_active_sections(self, miner_ip: str) -> bool:
+        """Check if a miner is in the active sections. True if no sections set (all active)."""
+        if self._active_section_ips is None:
+            return True
+        return miner_ip in self._active_section_ips
+    
+    async def set_active_sections(self, section_ips: set):
+        """Set active section IPs. Miners outside these IPs will be idled."""
+        self._active_section_ips = section_ips
+        logger.info("Active sections set", miner_count=len(section_ips))
+        # Idle miners not in the active sections
+        if self._use_direct_mode:
+            for miner in self.discovery.miners:
+                if miner.is_online and miner.ip not in section_ips:
+                    await self.discovery.set_miner_idle(miner.id)
+    
+    async def clear_active_sections(self):
+        """Clear active sections (all miners participate)."""
+        self._active_section_ips = None
+        logger.info("Active sections cleared — all miners participate")
     
     # =========================================================================
     # Status Polling
@@ -618,13 +644,18 @@ class FleetManager:
         So we prefer trimming down over ramping up, and we act conservatively
         when ramping up (miners may still be booting from a previous cycle).
         """
+        # Filter by active sections if set
+        _eligible = list(self.discovery.miners)
+        if self._active_section_ips is not None:
+            _eligible = [m for m in _eligible if m.ip in self._active_section_ips]
+        
         mining_miners = sorted(
-            [m for m in self.discovery.miners if m.is_online and m.is_mining],
+            [m for m in _eligible if m.is_online and m.is_mining],
             key=lambda m: m.ip
         )
         # Exclude miners that are still booting (transitioning) or in wake-failure backoff
         idle_miners = sorted(
-            [m for m in self.discovery.miners
+            [m for m in _eligible
              if m.is_online and not m.is_mining
              and not m.is_transitioning
              and not m.is_wake_backed_off
@@ -818,37 +849,45 @@ class FleetManager:
     
     async def _idle_enforcement_loop(self):
         """
-        Background loop to enforce idle state when fleet is in STANDBY.
+        Background loop to enforce idle state when fleet is in STANDBY,
+        and to enforce active-section boundaries in all states.
         
-        When the fleet is in STANDBY mode (after deactivation or on startup),
-        this loop continuously monitors for miners that might have started
-        mining (e.g., after restart, network glitch, or firmware behavior)
-        and re-idles them.
-        
-        Runs every 30 seconds to catch rogue miners.
+        Runs every 30 seconds.
         """
         while True:
             await asyncio.sleep(30)  # Check every 30 seconds
             
             try:
-                # Only enforce idle if we're in STANDBY state and no active power target
-                if self._status.state != FleetState.STANDBY:
-                    continue
-                
-                # If there's an active power target, skip (regulation loop handles it)
-                if self._target_power_kw is not None and self._target_power_kw > 0:
-                    continue
-                
-                # Skip if in manual override mode
-                if self._manual_override:
-                    continue
-                
                 # Skip in dev mode — don't interfere with manual tests
                 if self._dev_mode:
                     continue
                 
-                # In direct mode, find any miners that are mining when they shouldn't be
                 if self._use_direct_mode:
+                    # --- Active-section enforcement (runs in ALL states) ---
+                    # If sections are set, idle any miner OUTSIDE the sections
+                    if self._active_section_ips is not None:
+                        out_of_section = [
+                            m for m in self.discovery.miners
+                            if m.is_online and m.is_mining
+                            and m.ip not in self._active_section_ips
+                        ]
+                        if out_of_section:
+                            logger.warning(
+                                "Idling miners outside active sections",
+                                count=len(out_of_section),
+                                ips=[m.ip for m in out_of_section]
+                            )
+                            for miner in out_of_section:
+                                await self.discovery.set_miner_idle(miner.id)
+                    
+                    # --- STANDBY enforcement ---
+                    if self._status.state != FleetState.STANDBY:
+                        continue
+                    if self._target_power_kw is not None and self._target_power_kw > 0:
+                        continue
+                    if self._manual_override:
+                        continue
+                    
                     rogue_miners = [
                         m for m in self.discovery.miners
                         if m.is_online and m.is_mining
@@ -860,8 +899,6 @@ class FleetManager:
                             count=len(rogue_miners),
                             ips=[m.ip for m in rogue_miners]
                         )
-                        
-                        # Re-idle all rogue miners
                         for miner in rogue_miners:
                             ok, msg = await self.discovery.set_miner_idle(miner.id)
                             if ok:
@@ -1362,6 +1399,10 @@ class FleetManager:
         4. Any shortfall/overshoot is accepted (coarser control)
         """
         all_miners = [m for m in self.discovery.miners if m.is_online]
+        
+        # Filter by active sections if set
+        if self._active_section_ips is not None:
+            all_miners = [m for m in all_miners if m.ip in self._active_section_ips]
         
         if not all_miners:
             return False, "No online miners available"

@@ -756,8 +756,15 @@ svg.icon {
 }
 
 @keyframes pulse-danger {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
 }
 
 .power-bar {
@@ -5611,6 +5618,7 @@ details.config-section[open] summary.config-section-title::before {
 
 /* ---- Tablet portrait (≤768px) ---- */
 @media (max-width: 768px) {
+
     /* --- Header --- */
     .header {
         padding: var(--space-2) var(--space-3);
@@ -6037,6 +6045,7 @@ details.config-section[open] summary.config-section-title::before {
 
 /* ---- Small phones (≤480px) ---- */
 @media (max-width: 480px) {
+
     /* --- Header --- */
     .header {
         padding: var(--space-2);
@@ -6285,7 +6294,8 @@ details.config-section[open] summary.config-section-title::before {
 }
 
 /* ---- Prevent horizontal overflow on all sizes ---- */
-html, body {
+html,
+body {
     overflow-x: hidden;
 }
 
@@ -6295,6 +6305,7 @@ html, body {
 
 /* ---- Touch-friendly tap targets (44px minimum) ---- */
 @media (pointer: coarse) {
+
     .btn,
     .scope-btn,
     .modal-tab,
@@ -6311,9 +6322,12 @@ html, body {
     }
 
     /* Larger touch targets for controls */
-    input, select, textarea {
+    input,
+    select,
+    textarea {
         min-height: 44px;
-        font-size: 16px; /* Prevents iOS zoom on focus */
+        font-size: 16px;
+        /* Prevents iOS zoom on focus */
     }
 
     .header-select {
@@ -6344,10 +6358,21 @@ html, body {
     animation: dev-pulse 1.5s ease-in-out infinite;
     white-space: nowrap;
 }
-.dev-mode-badge.hidden { display: none; }
+
+.dev-mode-badge.hidden {
+    display: none;
+}
+
 @keyframes dev-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
 }
 
 /* =========================================================================
@@ -6357,9 +6382,18 @@ html, body {
     font-variant-numeric: tabular-nums;
     font-family: 'SF Mono', 'Fira Code', monospace;
 }
-.ems-timer.timer-green { color: #00c853; }
-.ems-timer.timer-red   { color: #ff5252; }
-.ems-timer.timer-idle  { color: var(--text-secondary, #888); }
+
+.ems-timer.timer-green {
+    color: #00c853;
+}
+
+.ems-timer.timer-red {
+    color: #ff5252;
+}
+
+.ems-timer.timer-idle {
+    color: var(--text-secondary, #888);
+}
 
 /* =========================================================================
    Section Test Card
@@ -6371,13 +6405,18 @@ html, body {
     padding: 20px;
     margin-bottom: 20px;
 }
-.section-test-card.hidden { display: none; }
+
+.section-test-card.hidden {
+    display: none;
+}
+
 .section-test-card .section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 16px;
 }
+
 .section-test-badge {
     font-size: 11px;
     font-weight: 700;
@@ -6386,21 +6425,35 @@ html, body {
     border-radius: 4px;
     text-transform: uppercase;
 }
-.section-test-badge.running { background: #2196f3; color: #fff; }
-.section-test-badge.done    { background: #00c853; color: #fff; }
-.section-test-badge.idle    { background: var(--border-color, #555); color: #aaa; }
+
+.section-test-badge.running {
+    background: #2196f3;
+    color: #fff;
+}
+
+.section-test-badge.done {
+    background: #00c853;
+    color: #fff;
+}
+
+.section-test-badge.idle {
+    background: var(--border-color, #555);
+    color: #aaa;
+}
 
 .section-test-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 12px;
 }
+
 .section-test-empty {
     color: var(--text-secondary, #888);
     grid-column: 1 / -1;
     text-align: center;
     padding: 16px;
 }
+
 .section-item {
     background: var(--bg-tertiary, #252538);
     border-radius: 8px;
@@ -6408,10 +6461,22 @@ html, body {
     border-left: 4px solid var(--border-color, #444);
     transition: border-color 0.3s;
 }
-.section-item.testing  { border-left-color: #2196f3; }
-.section-item.passed   { border-left-color: #00c853; }
-.section-item.failed   { border-left-color: #ff5252; }
-.section-item.waiting  { border-left-color: #555; }
+
+.section-item.testing {
+    border-left-color: #2196f3;
+}
+
+.section-item.passed {
+    border-left-color: #00c853;
+}
+
+.section-item.failed {
+    border-left-color: #ff5252;
+}
+
+.section-item.waiting {
+    border-left-color: #555;
+}
 
 .section-item-header {
     display: flex;
@@ -6419,20 +6484,34 @@ html, body {
     align-items: center;
     margin-bottom: 8px;
 }
+
 .section-item-title {
     font-weight: 600;
     font-size: 14px;
 }
+
 .section-item-status {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
-.section-item-status.testing { color: #2196f3; }
-.section-item-status.passed  { color: #00c853; }
-.section-item-status.failed  { color: #ff5252; }
-.section-item-status.waiting { color: #888; }
+
+.section-item-status.testing {
+    color: #2196f3;
+}
+
+.section-item-status.passed {
+    color: #00c853;
+}
+
+.section-item-status.failed {
+    color: #ff5252;
+}
+
+.section-item-status.waiting {
+    color: #888;
+}
 
 .section-item-progress {
     display: flex;
@@ -6441,6 +6520,7 @@ html, body {
     color: var(--text-secondary, #aaa);
     margin-top: 4px;
 }
+
 .section-item-bar {
     height: 4px;
     background: var(--border-color, #333);
@@ -6448,14 +6528,24 @@ html, body {
     margin-top: 6px;
     overflow: hidden;
 }
+
 .section-item-bar-fill {
     height: 100%;
     border-radius: 2px;
     transition: width 0.5s ease;
 }
-.section-item.testing .section-item-bar-fill  { background: #2196f3; }
-.section-item.passed .section-item-bar-fill   { background: #00c853; }
-.section-item.failed .section-item-bar-fill   { background: #ff5252; }
+
+.section-item.testing .section-item-bar-fill {
+    background: #2196f3;
+}
+
+.section-item.passed .section-item-bar-fill {
+    background: #00c853;
+}
+
+.section-item.failed .section-item-bar-fill {
+    background: #ff5252;
+}
 
 .section-test-failed {
     margin-top: 14px;
@@ -6466,4 +6556,7 @@ html, body {
     font-size: 13px;
     color: #ff5252;
 }
-.section-test-failed.hidden { display: none; }
+
+.section-test-failed.hidden {
+    display: none;
+}

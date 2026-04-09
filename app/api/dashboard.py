@@ -47,6 +47,7 @@ class FleetStatusResponse(BaseModel):
     errors: List[str]
     power_control_mode: str = "on_off"  # "frequency" or "on_off"
     dev_mode: bool = False
+    active_sections: Optional[List[int]] = None  # None = all active
 
 
 class MinerStatusResponse(BaseModel):
@@ -121,7 +122,8 @@ async def get_fleet_status():
         last_ems_command=s.last_ems_command,
         errors=s.errors,
         power_control_mode=fleet_manager.power_control_mode,
-        dev_mode=fleet_manager._dev_mode
+        dev_mode=fleet_manager._dev_mode,
+        active_sections=_get_active_section_nums(fleet_manager)
     )
 
 
@@ -2227,6 +2229,138 @@ async def toggle_dev_mode(enabled: bool = True):
     )
     
     return {"success": True, "dev_mode": enabled, "message": f"Dev mode {state}"}
+
+
+# =========================================================================
+# Active Sections API
+# =========================================================================
+
+def _compute_section_definitions() -> list:
+    """Compute section boundaries from the current miner list (same logic as test script)."""
+    fleet_manager = get_fleet_manager()
+    all_ips = sorted(
+        set(m.miner_id.replace("_", ".") for m in fleet_manager.status.miners),
+        key=lambda ip: tuple(int(x) for x in ip.split("."))
+    )
+    kw_per_miner = 1.4
+    section_kw = 50
+    miners_per_section = max(1, int(section_kw / kw_per_miner))
+    sections = []
+    for i in range(0, len(all_ips), miners_per_section):
+        chunk = all_ips[i:i + miners_per_section]
+        sections.append({
+            "id": len(sections) + 1,
+            "start": chunk[0],
+            "end": chunk[-1],
+            "count": len(chunk),
+            "miners": chunk,
+        })
+    return sections
+
+
+def _get_active_section_nums(fleet_manager) -> Optional[List[int]]:
+    """Return active section numbers or None if all active."""
+    if fleet_manager._active_section_ips is None:
+        return None
+    section_defs = _compute_section_definitions()
+    active_nums = []
+    for s in section_defs:
+        if any(ip in fleet_manager._active_section_ips for ip in s["miners"]):
+            active_nums.append(s["id"])
+    return active_nums
+
+
+class ActiveSectionsRequest(BaseModel):
+    """Request to set active sections."""
+    sections: List[int] = Field(..., description="List of section numbers to activate (1-based)")
+
+
+@router.get(
+    "/active_sections",
+    summary="Get active sections and section definitions"
+)
+async def get_active_sections():
+    """Get the section definitions and which sections are currently active."""
+    fleet_manager = get_fleet_manager()
+    section_defs = _compute_section_definitions()
+    active_ips = fleet_manager._active_section_ips
+    
+    # Figure out which section numbers are active
+    active_nums = []
+    if active_ips is not None:
+        for s in section_defs:
+            if any(ip in active_ips for ip in s["miners"]):
+                active_nums.append(s["id"])
+    
+    return {
+        "sections": [
+            {"id": s["id"], "start": s["start"], "end": s["end"], "count": s["count"]}
+            for s in section_defs
+        ],
+        "active_sections": active_nums if active_ips is not None else None,
+        "all_active": active_ips is None,
+    }
+
+
+@router.post(
+    "/active_sections",
+    summary="Set which sections participate in fleet operations"
+)
+async def set_active_sections(request: ActiveSectionsRequest):
+    """
+    Activate only the specified sections. Miners outside these sections
+    will be put to sleep and kept asleep by idle enforcement.
+    """
+    fleet_manager = get_fleet_manager()
+    section_defs = _compute_section_definitions()
+    valid_ids = {s["id"] for s in section_defs}
+    
+    invalid = [n for n in request.sections if n not in valid_ids]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid section numbers: {invalid}")
+    
+    # Compute set of IPs in the requested sections
+    active_ips = set()
+    for s in section_defs:
+        if s["id"] in request.sections:
+            active_ips.update(s["miners"])
+    
+    await fleet_manager.set_active_sections(active_ips)
+    
+    fleet_manager._log_command(
+        source="dashboard",
+        command="set_active_sections",
+        parameters={"sections": request.sections, "miner_count": len(active_ips)},
+        success=True,
+        message=f"Active sections: {request.sections} ({len(active_ips)} miners)"
+    )
+    
+    return {
+        "success": True,
+        "active_sections": request.sections,
+        "miner_count": len(active_ips),
+        "message": f"Sections {request.sections} active, {len(active_ips)} miners. Others will be idled."
+    }
+
+
+@router.delete(
+    "/active_sections",
+    summary="Clear active sections (all miners participate)"
+)
+async def clear_active_sections():
+    """Remove section restrictions — all miners participate in operations."""
+    fleet_manager = get_fleet_manager()
+    await fleet_manager.clear_active_sections()
+    
+    fleet_manager._log_command(
+        source="dashboard",
+        command="clear_active_sections",
+        parameters={},
+        success=True,
+        message="All sections active"
+    )
+    
+    return {"success": True, "message": "All miners now participate in fleet operations."}
 
 
 # =========================================================================

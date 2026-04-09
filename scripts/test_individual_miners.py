@@ -274,6 +274,8 @@ def main():
                         help=f"kW per section (default: {SECTION_KW})")
     parser.add_argument("--miners", type=str, default=None,
                         help="Comma-separated IPs to test (default: all)")
+    parser.add_argument("--section", type=int, default=None,
+                        help="Test only this section number (1-based). Sleeps all others first.")
     parser.add_argument("--keep-running", action="store_true", default=True,
                         help="Leave all miners running at the end (default: true)")
     parser.add_argument("--sleep-after", action="store_true", default=False,
@@ -305,7 +307,52 @@ def main():
     print(f"Sections: {len(sections)} × ~{miners_per} miners "
           f"(~{args.section_kw:.0f} kW each)")
     for i, sec in enumerate(sections):
-        print(f"  Section {i+1}: {sec[0]} – {sec[-1]} ({len(sec)} miners)")
+        marker = " ◀" if args.section == i + 1 else ""
+        print(f"  Section {i+1}: {sec[0]} – {sec[-1]} ({len(sec)} miners){marker}")
+
+    # If --section N, test only that one section in isolation
+    if args.section is not None:
+        idx = args.section - 1
+        if idx < 0 or idx >= len(sections):
+            print(f"ERROR: Section {args.section} does not exist (1-{len(sections)})")
+            sys.exit(1)
+        target_section = sections[idx]
+        print(f"\n{'='*60}")
+        print(f"  SINGLE SECTION TEST: Section {args.section} ({len(target_section)} miners)")
+        print(f"  Range: {target_section[0]} – {target_section[-1]}")
+        print(f"{'='*60}")
+
+        # Sleep ALL miners for a perfectly clean test
+        sleep_miners(ips, "all")
+        time.sleep(5)
+        print(f"  Baseline meter: {get_meter_kw():.1f} kW\n")
+
+        # Build dashboard state for just this one section
+        dash_sections = build_dashboard_sections([target_section])
+        push_dashboard_state(dash_sections, running=True, current=None)
+
+        results = test_section(target_section, 1, 1, [], dash_sections=dash_sections)
+        push_dashboard_state(dash_sections, running=False, current=None)
+
+        passed = sum(1 for v in results.values() if v)
+        failed_ips = sorted((ip for ip, ok in results.items() if not ok), key=ip_sort_key)
+        total = len(results)
+
+        print(f"\n{'='*60}")
+        print(f"  SECTION {args.section} RESULT: {passed}/{total} ({passed/total*100:.0f}%)")
+        print(f"{'='*60}")
+        if failed_ips:
+            print(f"  Failed:")
+            for ip in failed_ips:
+                print(f"    ✗ {ip}")
+        else:
+            print(f"  All miners passed ✓")
+
+        if args.sleep_after:
+            sleep_miners(target_section, "cleanup")
+        else:
+            print(f"\nSection {args.section} miners LEFT RUNNING")
+        return
 
     # Build dashboard section state
     dash_sections = build_dashboard_sections(sections)
