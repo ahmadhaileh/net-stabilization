@@ -1068,39 +1068,18 @@ class MinerDiscoveryService:
         except Exception:
             return False
     
-    async def _full_reboot_miner(self, ip: str) -> bool:
-        """Send reboot.cgi for a full system reboot.
-        
-        After a full reboot the miner boots fresh and CGMiner starts
-        automatically as part of normal init — sleep state is NOT
-        persisted across reboots.
-        """
-        if self._poke_client is None:
-            return False
-        url = f"http://{ip}/cgi-bin/reboot.cgi"
-        auth = httpx.DigestAuth(self._vnish_username, self._vnish_password)
-        try:
-            resp = await self._poke_client.get(url, auth=auth, timeout=10.0)
-            return resp.status_code == 200
-        except httpx.TimeoutException:
-            # Timeout expected — miner is rebooting
-            return True
-        except Exception:
-            return False
-    
     async def _poke_loop(self):
         """Background loop that pokes all waking miners to stimulate boot.
         
-        Escalation strategy:
-        - 0-75s: HTTP pokes via get_miner_status.cgi
-        - 75s+: Full system reboot via reboot.cgi for miners whose web
-          server is responding (>=8 successful pokes) but CGMiner still
-          hasn't started.  After reboot the miner boots fresh and CGMiner
-          starts automatically.
+        Sends HTTP GET to get_miner_status.cgi every few seconds.
+        The Vnish firmware defers cgminer restart until subsequent
+        HTTP requests arrive after a wake command.
+        
+        NO escalation (reboot_cgminer, reboot, config change) is used
+        because Vnish 3.9.0 has a fundamental issue where any CGMiner
+        restart has a ~35% failure rate with no auto-recovery.
         """
         logger.info("Poke loop running")
-        rebooted: set = set()  # IPs that already got a full reboot
-        poke_success_count: Dict[str, int] = {}  # ip -> count of successful pokes
         
         while True:
             try:
@@ -1111,7 +1090,6 @@ class MinerDiscoveryService:
                 now = datetime.utcnow()
                 expired = []
                 poke_targets = []
-                reboot_targets = []
                 
                 for ip, wake_time in list(self._waking_miners.items()):
                     elapsed = (now - wake_time).total_seconds()
@@ -1121,47 +1099,25 @@ class MinerDiscoveryService:
                         continue
                     
                     poke_targets.append(ip)
-                    
-                    # After 75s with >=8 successful HTTP responses but
-                    # CGMiner still not up → full system reboot
-                    if (elapsed > 75.0
-                            and ip not in rebooted
-                            and poke_success_count.get(ip, 0) >= 8):
-                        reboot_targets.append(ip)
                 
                 # Remove expired miners
                 for ip in expired:
                     logger.warning("Miner failed to boot after poke timeout",
                                    ip=ip, timeout_s=self._poke_give_up_after)
                     del self._waking_miners[ip]
-                    poke_success_count.pop(ip, None)
-                    rebooted.discard(ip)
                 
                 if not poke_targets:
                     await asyncio.sleep(self._poke_interval)
                     continue
                 
-                # Full reboot for miners stuck in half-wake state
-                if reboot_targets:
-                    rb_tasks = [self._full_reboot_miner(ip) for ip in reboot_targets]
-                    results = await asyncio.gather(*rb_tasks, return_exceptions=True)
-                    for ip, result in zip(reboot_targets, results):
-                        rebooted.add(ip)
-                        ok = isinstance(result, bool) and result
-                        logger.info("Full reboot sent to stuck miner",
-                                    ip=ip, success=ok)
-                
                 # Poke all waking miners concurrently
                 poke_tasks = [self._poke_one(ip) for ip in poke_targets]
-                results = await asyncio.gather(*poke_tasks, return_exceptions=True)
-                for ip, result in zip(poke_targets, results):
-                    if isinstance(result, bool) and result:
-                        poke_success_count[ip] = poke_success_count.get(ip, 0) + 1
+                await asyncio.gather(*poke_tasks, return_exceptions=True)
                 
                 if len(poke_targets) >= 5:
                     logger.info("Poke round complete",
                                 poked=len(poke_targets),
-                                reboots=len(reboot_targets))
+                                waking=len(self._waking_miners))
                 
             except asyncio.CancelledError:
                 raise
