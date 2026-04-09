@@ -234,6 +234,10 @@ class FleetManager:
             self._idle_enforcement_task = asyncio.create_task(self._idle_enforcement_loop())
             logger.info("Started idle enforcement loop")
         
+        # Start wake-poke loop (Vnish firmware needs HTTP stimulation after wake)
+        if self._use_direct_mode and self.discovery is not None:
+            await self.discovery.start_poke_loop()
+        
         # Start periodic discovery if in direct mode
         if self._use_direct_mode and self.settings.auto_discovery_on_startup:
             # Run initial discovery

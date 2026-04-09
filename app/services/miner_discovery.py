@@ -999,6 +999,154 @@ class MinerDiscoveryService:
         # Snapshot timing - track last snapshot time per miner
         self._last_snapshot_time: Dict[str, datetime] = {}
         self._snapshot_interval = settings.snapshot_interval_seconds
+        
+        # ── Wake-poke subsystem ──────────────────────────────────────
+        # Vnish firmware requires HTTP stimulation after wake command to
+        # actually restart cgminer.  This background loop pokes every
+        # waking miner every few seconds until it starts mining.
+        self._waking_miners: Dict[str, datetime] = {}   # ip -> wake_time
+        self._poke_task: Optional[asyncio.Task] = None
+        self._poke_client: Optional[httpx.AsyncClient] = None
+        self._poke_interval: float = 3.0   # seconds between poke rounds
+        self._poke_rewake_after: float = 120.0  # re-send wake if not booted
+        self._poke_give_up_after: float = 300.0  # stop poking after 5 min
+        self._vnish_username: str = settings.vnish_username
+        self._vnish_password: str = settings.vnish_password
+    
+    # =========================================================================
+    # Wake-Poke Subsystem
+    # =========================================================================
+    
+    async def start_poke_loop(self):
+        """Start the background wake-poke loop."""
+        if self._poke_task is not None:
+            return
+        self._poke_client = httpx.AsyncClient()
+        self._poke_task = asyncio.create_task(self._poke_loop())
+        logger.info("Wake-poke loop started")
+    
+    async def stop_poke_loop(self):
+        """Stop the background wake-poke loop."""
+        if self._poke_task is not None:
+            self._poke_task.cancel()
+            try:
+                await self._poke_task
+            except asyncio.CancelledError:
+                pass
+            self._poke_task = None
+        if self._poke_client is not None:
+            await self._poke_client.aclose()
+            self._poke_client = None
+        self._waking_miners.clear()
+        logger.info("Wake-poke loop stopped")
+    
+    def register_waking_miner(self, ip: str):
+        """Register a miner that needs HTTP pokes to complete its wake."""
+        self._waking_miners[ip] = datetime.utcnow()
+        logger.debug("Registered waking miner for poke", ip=ip,
+                     total_waking=len(self._waking_miners))
+    
+    def unregister_waking_miner(self, ip: str):
+        """Remove a miner from the poke list (it started mining or was slept)."""
+        if ip in self._waking_miners:
+            elapsed = (datetime.utcnow() - self._waking_miners[ip]).total_seconds()
+            del self._waking_miners[ip]
+            logger.debug("Unregistered waking miner", ip=ip, boot_time_s=round(elapsed),
+                         remaining=len(self._waking_miners))
+    
+    async def _poke_one(self, ip: str) -> bool:
+        """Send a single HTTP poke to stimulate firmware wake."""
+        if self._poke_client is None:
+            return False
+        url = f"http://{ip}/cgi-bin/get_miner_status.cgi"
+        auth = httpx.DigestAuth(self._vnish_username, self._vnish_password)
+        try:
+            resp = await self._poke_client.get(url, auth=auth, timeout=5.0)
+            return resp.status_code == 200
+        except Exception:
+            return False
+    
+    async def _rewake_one(self, ip: str) -> bool:
+        """Re-send wake command for a miner that hasn't booted yet."""
+        if self._poke_client is None:
+            return False
+        url = f"http://{ip}/cgi-bin/do_sleep_mode.cgi"
+        auth = httpx.DigestAuth(self._vnish_username, self._vnish_password)
+        try:
+            resp = await self._poke_client.post(
+                url, auth=auth,
+                data={"mode": "0"},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10.0
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
+    
+    async def _poke_loop(self):
+        """Background loop that pokes all waking miners to stimulate boot."""
+        logger.info("Poke loop running")
+        rewake_sent: Dict[str, bool] = {}  # ip -> True if re-wake already sent
+        
+        while True:
+            try:
+                if not self._waking_miners:
+                    await asyncio.sleep(self._poke_interval)
+                    continue
+                
+                now = datetime.utcnow()
+                expired = []
+                poke_targets = []
+                rewake_targets = []
+                
+                for ip, wake_time in list(self._waking_miners.items()):
+                    elapsed = (now - wake_time).total_seconds()
+                    
+                    if elapsed > self._poke_give_up_after:
+                        expired.append(ip)
+                        continue
+                    
+                    poke_targets.append(ip)
+                    
+                    # Re-wake once if miner hasn't booted after threshold
+                    if elapsed > self._poke_rewake_after and ip not in rewake_sent:
+                        rewake_targets.append(ip)
+                
+                # Remove expired miners
+                for ip in expired:
+                    logger.warning("Miner failed to boot after poke timeout",
+                                   ip=ip, timeout_s=self._poke_give_up_after)
+                    del self._waking_miners[ip]
+                    rewake_sent.pop(ip, None)
+                
+                if not poke_targets:
+                    await asyncio.sleep(self._poke_interval)
+                    continue
+                
+                # Send re-wake commands for slow miners
+                if rewake_targets:
+                    rewake_tasks = [self._rewake_one(ip) for ip in rewake_targets]
+                    results = await asyncio.gather(*rewake_tasks, return_exceptions=True)
+                    for ip, result in zip(rewake_targets, results):
+                        if isinstance(result, bool) and result:
+                            rewake_sent[ip] = True
+                            logger.info("Re-wake command sent", ip=ip)
+                
+                # Poke all waking miners concurrently
+                poke_tasks = [self._poke_one(ip) for ip in poke_targets]
+                await asyncio.gather(*poke_tasks, return_exceptions=True)
+                
+                if len(poke_targets) >= 5:
+                    logger.debug("Poke round complete",
+                                 poked=len(poke_targets),
+                                 rewaked=len(rewake_targets))
+                
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Error in poke loop", error=str(e))
+            
+            await asyncio.sleep(self._poke_interval)
     
     def _estimate_antminer_power(self, model: str) -> float:
         """Estimate rated power for Antminer models in watts."""
@@ -1440,6 +1588,8 @@ class MinerDiscoveryService:
                 miner.power_mode = MinerPowerMode.NORMAL
                 if miner.consecutive_wake_failures > 0:
                     miner.clear_wake_failures()
+                # Miner booted — stop poking it
+                self.unregister_waking_miner(miner.ip)
                 logger.info("Sleeping miner woke up (fast-path)", ip=miner.ip,
                             hashrate_ghs=round(vnish_hashrate, 1))
             else:
@@ -1563,6 +1713,10 @@ class MinerDiscoveryService:
                 )
                 miner.clear_wake_failures()
             
+            # Miner is hashing → stop poking it
+            if miner.is_mining:
+                self.unregister_waking_miner(miner.ip)
+            
             # Get current frequency from miner config (for frequency-based power control)
             try:
                 vnish = VnishWebAPI(miner.ip)
@@ -1612,6 +1766,8 @@ class MinerDiscoveryService:
                     miner.is_mining = True
                     miner.hashrate_ghs = min(vnish_hashrate, _MAX_MINER_HASHRATE_GHS)
                     miner.power_mode = MinerPowerMode.NORMAL
+                    # Stop poking — miner booted
+                    self.unregister_waking_miner(miner.ip)
                     
                     # Clear wake failures — miner is working
                     if miner.consecutive_wake_failures > 0:
@@ -2025,6 +2181,8 @@ class MinerDiscoveryService:
                 miner.power_mode = MinerPowerMode.IDLE
                 miner.is_mining = False
                 miner.hashrate_ghs = 0
+                # Stop poking this miner — it's being put to sleep
+                self.unregister_waking_miner(miner.ip)
                 logger.info("Miner entered sleep mode", ip=miner.ip)
                 return True, "Miner entered sleep mode"
             else:
@@ -2067,6 +2225,9 @@ class MinerDiscoveryService:
                 # power_mode gets set to NORMAL once Vnish detects hashrate > 0.
                 # Don't set is_mining=True yet - will be confirmed on next status update
                 logger.info("Miner wake command sent - will take 45-60s to resume", ip=miner.ip)
+                # Register for continuous HTTP poking — Vnish firmware needs
+                # subsequent HTTP requests to actually restart cgminer.
+                self.register_waking_miner(miner.ip)
                 return True, "Wake command sent - miner resuming (takes ~45-60s)"
             else:
                 logger.warning("Wake from sleep command failed", ip=miner.ip)
