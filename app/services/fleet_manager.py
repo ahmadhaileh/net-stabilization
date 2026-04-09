@@ -130,6 +130,10 @@ class FleetManager:
         # tests don't get interfered with by the server.
         self._dev_mode: bool = False
         
+        # Polling pause: completely stops background polling to eliminate
+        # all fleet manager network traffic.  Used for network diagnostics.
+        self._polling_paused: bool = False
+        
         # Active sections: when set, only miners in these IPs participate
         # in fleet operations.  All others are put to sleep and kept asleep.
         # None = all miners active (default).
@@ -424,7 +428,10 @@ class FleetManager:
         """Background loop that polls miner status."""
         while True:
             try:
-                await self.update_status()
+                if self._polling_paused:
+                    logger.debug("Polling paused — skipping")
+                else:
+                    await self.update_status()
             except Exception as e:
                 logger.error("Error in polling loop", error=str(e))
             

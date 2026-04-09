@@ -199,6 +199,20 @@ def enable_dev_mode():
         print(f"  WARNING: Could not enable dev mode: {e}")
 
 
+def set_polling_paused(paused: bool):
+    """Pause or resume fleet manager background polling."""
+    state = "paused" if paused else "resumed"
+    try:
+        req = urllib.request.Request(
+            f"{DASHBOARD_API}/pause_polling?enabled={'true' if paused else 'false'}",
+            method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            print(f"  Polling: {result}")
+    except Exception as e:
+        print(f"  WARNING: Could not set polling {state}: {e}")
+
+
 # ── Phase 1: Latency Measurement ───────────────────────────────────
 
 def measure_ping(ip, count=3):
@@ -479,52 +493,56 @@ def main():
         print(f"  Measure network latency to miners under different loads")
         print(f"{'='*70}")
 
+        # Ensure Docker is running
+        if not docker_is_running():
+            docker_start()
+        enable_dev_mode()
+
         # Pick sample miners from each section
         sample_sec1 = sections[0][::7][:5]   # 5 from section 1
         sample_sec2 = sections[1][::7][:5]   # 5 from section 2
         sample_sec3 = sections[2][::7][:5]   # 5 from section 3
         sample_all = sample_sec1 + sample_sec2 + sample_sec3
 
-        # 1A: All miners asleep
-        print("\n  --- 1A: All miners asleep (zero load) ---")
+        # 1A: All miners asleep, polling active
+        print("\n  --- 1A: All miners asleep (zero load, polling active) ---")
+        set_polling_paused(False)
         sleep_miners(ips, "all")
         time.sleep(5)
-        lat_idle = run_latency_test(ips, "All asleep (0 load)", sample_all)
+        lat_idle = run_latency_test(ips, "All asleep, polling on", sample_all)
         results_summary["latency_idle"] = lat_idle
 
-        # 1B: Sections 1+2 running (64 miners), fleet manager ON
-        print("\n  --- 1B: Sections 1+2 running, fleet manager ON ---")
-        # Need fleet manager running to use API
-        if not docker_is_running():
-            docker_start()
-        enable_dev_mode()
+        # 1B: Sections 1+2 running, polling active
+        print("\n  --- 1B: Sections 1+2 running, polling ACTIVE ---")
         running = wake_sections_1_2(sections, ips)
-        lat_load_fm = run_latency_test(ips, f"64 mining + FM polling", sample_sec3)
-        results_summary["latency_load_fm_on"] = lat_load_fm
+        lat_load_poll = run_latency_test(ips, f"{running} mining + polling", sample_sec3)
+        results_summary["latency_load_poll_on"] = lat_load_poll
 
-        # 1C: Same load, fleet manager OFF
-        print("\n  --- 1C: Sections 1+2 running, fleet manager OFF ---")
-        docker_stop()
-        time.sleep(5)
-        lat_load_no_fm = run_latency_test(ips, f"64 mining, no FM polling", sample_sec3)
-        results_summary["latency_load_fm_off"] = lat_load_no_fm
+        # 1C: Same load, polling PAUSED
+        print("\n  --- 1C: Sections 1+2 running, polling PAUSED ---")
+        set_polling_paused(True)
+        time.sleep(10)  # Let in-flight polls finish
+        lat_load_no_poll = run_latency_test(ips, f"{running} mining, no polling", sample_sec3)
+        results_summary["latency_load_poll_off"] = lat_load_no_poll
 
         # Cleanup
+        set_polling_paused(False)
         sleep_miners(ips, "cleanup after phase 1")
 
     # ================================================================
-    # PHASE 2: Boot Test WITHOUT Fleet Manager
+    # PHASE 2: Boot Test WITHOUT Polling
     # ================================================================
     if run_phase2:
         print(f"\n{'='*70}")
-        print(f"  PHASE 2: BOOT SECTION 3 — NO FLEET MANAGER")
-        print(f"  Docker container stopped → zero background polling")
-        print(f"  If this passes ~90%+, the fleet manager is the bottleneck")
+        print(f"  PHASE 2: BOOT SECTION 3 — POLLING PAUSED")
+        print(f"  Fleet manager running but all background polling stopped")
+        print(f"  If this passes ~90%+, the fleet manager polling is the bottleneck")
         print(f"{'='*70}")
 
-        # Ensure Docker is stopped
-        if docker_is_running():
-            docker_stop()
+        # Ensure Docker is running
+        if not docker_is_running():
+            docker_start()
+        enable_dev_mode()
 
         # Sleep all
         sleep_miners(ips, "all")
@@ -533,30 +551,39 @@ def main():
         # Wake sections 1+2 to create load (64 miners)
         running_12 = wake_sections_1_2(sections, ips)
 
-        # Now boot section 3 — the critical test
+        # NOW pause polling — eliminate all fleet manager network traffic
+        set_polling_paused(True)
+        time.sleep(10)  # Let in-flight polls drain
+        print(f"  Polling paused — zero fleet manager traffic")
+
+        # Boot section 3 — the critical test
         sec3_results, sec3_timing = boot_section_timed(
             sec3, running_12,
-            "Section 3 — NO fleet manager polling"
+            "Section 3 — POLLING PAUSED"
         )
-        results_summary["boot_no_fm"] = sec3_timing
+        results_summary["boot_no_poll"] = sec3_timing
+
+        # Resume polling
+        set_polling_paused(False)
 
         # Cleanup
         sleep_miners(ips, "cleanup after phase 2")
 
     # ================================================================
-    # PHASE 3: Boot Test WITH Fleet Manager
+    # PHASE 3: Boot Test WITH Polling
     # ================================================================
     if run_phase3:
         print(f"\n{'='*70}")
-        print(f"  PHASE 3: BOOT SECTION 3 — WITH FLEET MANAGER")
-        print(f"  Docker container running → background polling active")
-        print(f"  Compare to Phase 2 to isolate software vs hardware")
+        print(f"  PHASE 3: BOOT SECTION 3 — POLLING ACTIVE")
+        print(f"  Fleet manager running with full background polling")
+        print(f"  Compare to Phase 2 to isolate polling impact")
         print(f"{'='*70}")
 
-        # Start Docker
+        # Ensure Docker is running
         if not docker_is_running():
             docker_start()
         enable_dev_mode()
+        set_polling_paused(False)
         time.sleep(10)  # Let polling stabilize
 
         # Sleep all
@@ -569,9 +596,9 @@ def main():
         # Boot section 3 — with fleet manager polling
         sec3_results, sec3_timing = boot_section_timed(
             sec3, running_12,
-            "Section 3 — WITH fleet manager polling"
+            "Section 3 — POLLING ACTIVE"
         )
-        results_summary["boot_with_fm"] = sec3_timing
+        results_summary["boot_with_poll"] = sec3_timing
 
         # Cleanup
         sleep_miners(ips, "cleanup after phase 3")
@@ -586,7 +613,7 @@ def main():
     # Latency comparison
     if "latency_idle" in results_summary:
         print(f"\n  LATENCY (section 3 miners):")
-        for key in ["latency_idle", "latency_load_fm_on", "latency_load_fm_off"]:
+        for key in ["latency_idle", "latency_load_poll_on", "latency_load_poll_off"]:
             if key not in results_summary:
                 continue
             d = results_summary[key]
@@ -602,49 +629,47 @@ def main():
     # Reference: original cliff test
     print(f"    {'Original cliff test (sec 1+2+3)':>45} | {'17':>4} | {'35':>5} | {'49%':>5}")
 
-    for key in ["boot_no_fm", "boot_with_fm"]:
+    for key in ["boot_no_poll", "boot_with_poll"]:
         if key in results_summary:
             d = results_summary[key]
             rate = f"{d['rate']:.0f}%"
             print(f"    {d['label']:>45} | {d['passed']:>4} | {d['total']:>5} | {rate:>5}")
 
     # Verdict
-    if "boot_no_fm" in results_summary and "boot_with_fm" in results_summary:
-        no_fm = results_summary["boot_no_fm"]["rate"]
-        with_fm = results_summary["boot_with_fm"]["rate"]
-        diff = no_fm - with_fm
+    if "boot_no_poll" in results_summary and "boot_with_poll" in results_summary:
+        no_poll = results_summary["boot_no_poll"]["rate"]
+        with_poll = results_summary["boot_with_poll"]["rate"]
+        diff = no_poll - with_poll
 
         print(f"\n  VERDICT:")
-        if no_fm > 80 and diff > 20:
-            print(f"    ⚡ SOFTWARE BOTTLENECK (fleet manager)")
-            print(f"    Without FM: {no_fm:.0f}%  |  With FM: {with_fm:.0f}%  |  Δ = {diff:.0f}%")
+        if no_poll > 80 and diff > 20:
+            print(f"    ⚡ SOFTWARE BOTTLENECK (fleet manager polling)")
+            print(f"    Without polling: {no_poll:.0f}%  |  With polling: {with_poll:.0f}%  |  Δ = {diff:.0f}%")
             print(f"    The fleet manager's background polling (172 miners × 4 calls")
-            print(f"    every 5s = ~700 requests/cycle) saturates the network.")
-            print(f"    FIX: Reduce poll frequency, lower concurrency, or use")
+            print(f"    every 5s) saturates network or miner CPUs during boot.")
+            print(f"    FIX: Reduce poll frequency, lower concurrency, or")
             print(f"    section-aware polling (only poll active section miners).")
-        elif no_fm > 80 and diff <= 20:
-            print(f"    ⚡ MIXED — FM contributes but not the only cause")
-            print(f"    Without FM: {no_fm:.0f}%  |  With FM: {with_fm:.0f}%  |  Δ = {diff:.0f}%")
-            print(f"    Consider both polling reduction AND network investigation.")
-        elif no_fm <= 55:
+        elif no_poll > 80 and diff <= 20:
+            print(f"    ⚡ MIXED — polling contributes but not the only cause")
+            print(f"    Without polling: {no_poll:.0f}%  |  With polling: {with_poll:.0f}%  |  Δ = {diff:.0f}%")
+        elif no_poll <= 55:
             print(f"    ⚡ HARDWARE/NETWORK BOTTLENECK")
-            print(f"    Without FM: {no_fm:.0f}%  |  With FM: {with_fm:.0f}%  |  Δ = {diff:.0f}%")
-            print(f"    Even without the fleet manager, section 3 fails at ~49%.")
+            print(f"    Without polling: {no_poll:.0f}%  |  With polling: {with_poll:.0f}%  |  Δ = {diff:.0f}%")
+            print(f"    Even without polling, section 3 fails under load.")
             print(f"    The running miners' own traffic saturates the network.")
             print(f"    FIX: Check switch capacity, VLAN segmentation, or")
             print(f"    stagger wake commands with delays between batches.")
         else:
             print(f"    ⚡ PARTIAL IMPROVEMENT")
-            print(f"    Without FM: {no_fm:.0f}%  |  With FM: {with_fm:.0f}%  |  Δ = {diff:.0f}%")
+            print(f"    Without polling: {no_poll:.0f}%  |  With polling: {with_poll:.0f}%  |  Δ = {diff:.0f}%")
             print(f"    Both factors contribute. Fix software first, then reassess.")
-    elif "boot_no_fm" in results_summary:
-        no_fm = results_summary["boot_no_fm"]["rate"]
+    elif "boot_no_poll" in results_summary:
+        no_poll = results_summary["boot_no_poll"]["rate"]
         print(f"\n  PARTIAL VERDICT (Phase 2 only):")
-        if no_fm > 80:
-            print(f"    Without FM: {no_fm:.0f}% — fleet manager polling is likely the cause.")
-            print(f"    Run Phase 3 to confirm.")
+        if no_poll > 80:
+            print(f"    Without polling: {no_poll:.0f}% — polling is likely the cause.")
         else:
-            print(f"    Without FM: {no_fm:.0f}% — network saturation even without FM.")
+            print(f"    Without polling: {no_poll:.0f}% — network saturation even without polling.")
 
     # Ensure Docker is running at the end
     if not docker_is_running():

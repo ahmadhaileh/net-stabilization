@@ -2231,6 +2231,32 @@ async def toggle_dev_mode(enabled: bool = True):
     return {"success": True, "dev_mode": enabled, "message": f"Dev mode {state}"}
 
 
+@router.post(
+    "/pause_polling",
+    summary="Pause or resume fleet manager background polling"
+)
+async def toggle_pause_polling(enabled: bool = True):
+    """
+    Pause/resume ALL background polling.
+
+    When paused, the fleet manager stops all network traffic to miners
+    (status polling, discovery, regulation, idle enforcement).
+    Used for network diagnostics to isolate fleet manager traffic.
+    """
+    fleet_manager = get_fleet_manager()
+    fleet_manager._polling_paused = enabled
+    state = "PAUSED" if enabled else "RESUMED"
+    logger.info(f"Polling {state}")
+    fleet_manager._log_command(
+        source="dashboard",
+        command="pause_polling",
+        parameters={"enabled": enabled},
+        success=True,
+        message=f"Polling {state}"
+    )
+    return {"success": True, "polling_paused": enabled, "message": f"Polling {state}"}
+
+
 # =========================================================================
 # Active Sections API
 # =========================================================================
