@@ -1008,8 +1008,7 @@ class MinerDiscoveryService:
         self._poke_task: Optional[asyncio.Task] = None
         self._poke_client: Optional[httpx.AsyncClient] = None
         self._poke_interval: float = 3.0   # seconds between poke rounds
-        self._poke_rewake_after: float = 120.0  # re-send wake if not booted
-        self._poke_give_up_after: float = 300.0  # stop poking after 5 min
+        self._poke_give_up_after: float = 600.0  # stop poking after 10 min
         self._vnish_username: str = settings.vnish_username
         self._vnish_password: str = settings.vnish_password
     
@@ -1086,7 +1085,6 @@ class MinerDiscoveryService:
     async def _poke_loop(self):
         """Background loop that pokes all waking miners to stimulate boot."""
         logger.info("Poke loop running")
-        rewake_sent: Dict[str, bool] = {}  # ip -> True if re-wake already sent
         
         while True:
             try:
@@ -1097,7 +1095,6 @@ class MinerDiscoveryService:
                 now = datetime.utcnow()
                 expired = []
                 poke_targets = []
-                rewake_targets = []
                 
                 for ip, wake_time in list(self._waking_miners.items()):
                     elapsed = (now - wake_time).total_seconds()
@@ -1107,30 +1104,16 @@ class MinerDiscoveryService:
                         continue
                     
                     poke_targets.append(ip)
-                    
-                    # Re-wake once if miner hasn't booted after threshold
-                    if elapsed > self._poke_rewake_after and ip not in rewake_sent:
-                        rewake_targets.append(ip)
                 
                 # Remove expired miners
                 for ip in expired:
                     logger.warning("Miner failed to boot after poke timeout",
                                    ip=ip, timeout_s=self._poke_give_up_after)
                     del self._waking_miners[ip]
-                    rewake_sent.pop(ip, None)
                 
                 if not poke_targets:
                     await asyncio.sleep(self._poke_interval)
                     continue
-                
-                # Send re-wake commands for slow miners
-                if rewake_targets:
-                    rewake_tasks = [self._rewake_one(ip) for ip in rewake_targets]
-                    results = await asyncio.gather(*rewake_tasks, return_exceptions=True)
-                    for ip, result in zip(rewake_targets, results):
-                        if isinstance(result, bool) and result:
-                            rewake_sent[ip] = True
-                            logger.info("Re-wake command sent", ip=ip)
                 
                 # Poke all waking miners concurrently
                 poke_tasks = [self._poke_one(ip) for ip in poke_targets]
@@ -1138,8 +1121,7 @@ class MinerDiscoveryService:
                 
                 if len(poke_targets) >= 5:
                     logger.info("Poke round complete",
-                                poked=len(poke_targets),
-                                rewaked=len(rewake_targets))
+                                poked=len(poke_targets))
                 
             except asyncio.CancelledError:
                 raise
@@ -2205,6 +2187,16 @@ class MinerDiscoveryService:
         - Then idle again
         - Then finally mining
         """
+        # Skip if miner is already in the poke queue (still booting).
+        # The regulation loop may re-call this for miners that appear "idle"
+        # because CGMiner hasn't finished initialising yet.  Re-sending the
+        # wake command resets the boot process and prevents convergence.
+        if miner.ip in self._waking_miners:
+            elapsed = (datetime.utcnow() - self._waking_miners[miner.ip]).total_seconds()
+            logger.info("Skipping wake — miner already booting (poke active)",
+                        ip=miner.ip, booting_for_s=round(elapsed))
+            return True, "Already waking (poke active)"
+
         vnish = VnishWebAPI(miner.ip)
         
         try:
