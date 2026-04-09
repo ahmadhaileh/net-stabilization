@@ -1,0 +1,158 @@
+/* Grid Stabilization v2 — Section-based dashboard */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #0a0e14;
+  --surface: #0f1419;
+  --elevated: #151b23;
+  --border: rgba(255,255,255,0.08);
+  --text: #e6edf3;
+  --text2: #8b949e;
+  --text3: #6e7681;
+  --green: #00c853;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #9c27b0;
+  --cyan: #39c5cf;
+  --font: 'Inter', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:var(--font); background:var(--bg); color:var(--text); min-height:100vh; }
+
+/* Header */
+header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--border);
+}
+header h1 { font-size:16px; font-weight:600; }
+.header-stats { display:flex; gap:24px; font-size:13px; }
+.header-stats .stat { text-align:center; }
+.header-stats .stat-val { font-family:var(--mono); font-size:15px; font-weight:600; }
+.header-stats .stat-lbl { color:var(--text2); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+.dot-green { background:var(--green); box-shadow:0 0 6px var(--green); }
+.dot-yellow { background:var(--yellow); }
+.dot-red { background:var(--red); }
+.dot-gray { background:var(--text3); }
+
+/* Main layout */
+main { padding:20px 24px; display:flex; flex-direction:column; gap:16px; }
+
+/* Cards */
+.card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; padding:16px;
+}
+.card-title {
+  font-size:11px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.8px; color:var(--text2); margin-bottom:12px;
+}
+
+/* Fleet overview bar */
+.overview {
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));
+  gap:12px;
+}
+.overview .metric {
+  background:var(--elevated); border-radius:6px; padding:12px; text-align:center;
+}
+.metric .val { font-family:var(--mono); font-size:22px; font-weight:700; }
+.metric .lbl { color:var(--text2); font-size:11px; margin-top:2px; }
+.metric.accent .val { color:var(--green); }
+
+/* Power bar */
+.power-bar-container { margin-top:4px; }
+.power-bar-bg {
+  background:var(--elevated); height:24px; border-radius:4px;
+  position:relative; overflow:hidden;
+}
+.power-bar-fill {
+  height:100%; background: linear-gradient(90deg, var(--green), var(--cyan));
+  border-radius:4px; transition: width 0.5s ease;
+}
+.power-bar-target {
+  position:absolute; top:0; height:100%; width:2px; background:var(--yellow);
+  transition: left 0.5s ease;
+}
+.power-bar-labels {
+  display:flex; justify-content:space-between; font-size:11px;
+  color:var(--text2); margin-top:4px; font-family:var(--mono);
+}
+
+/* Sections grid */
+.sections { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+.section-card {
+  background:var(--elevated); border:1px solid var(--border);
+  border-radius:8px; padding:14px; transition: border-color 0.2s;
+}
+.section-card.active { border-color: var(--green); }
+.section-card .sec-header {
+  display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;
+}
+.section-card .sec-name { font-weight:700; font-size:15px; }
+.section-card .sec-target { font-family:var(--mono); font-size:13px; color:var(--text2); }
+.section-card .sec-bar-bg {
+  background:var(--bg); height:6px; border-radius:3px; overflow:hidden; margin-bottom:8px;
+}
+.section-card .sec-bar-fill { height:100%; border-radius:3px; transition: width 0.4s ease; }
+.section-card .sec-counts {
+  display:flex; gap:10px; font-size:12px; font-family:var(--mono);
+}
+.section-card .sec-counts span { display:flex; align-items:center; gap:4px; }
+.sec-counts .c-mining { color:var(--green); }
+.sec-counts .c-waking { color:var(--yellow); }
+.sec-counts .c-idle { color:var(--text3); }
+.sec-counts .c-off { color:var(--red); }
+
+/* Miner grid */
+.miner-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(32px, 1fr)); gap:4px;
+}
+.miner-dot {
+  width:32px; height:32px; border-radius:4px; display:flex;
+  align-items:center; justify-content:center;
+  font-family:var(--mono); font-size:9px; color:var(--bg);
+  font-weight:600; cursor:default; transition: transform 0.15s;
+}
+.miner-dot:hover { transform:scale(1.3); z-index:1; }
+.miner-dot.mining { background:var(--green); }
+.miner-dot.waking { background:var(--yellow); animation:pulse 1.5s infinite; }
+.miner-dot.idle { background:var(--text3); }
+.miner-dot.offline { background:var(--red); opacity:0.5; }
+
+@keyframes pulse {
+  0%, 100% { opacity:1; }
+  50% { opacity:0.5; }
+}
+
+/* Control panel */
+.controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.btn {
+  font-family:var(--font); font-size:13px; font-weight:500;
+  padding:8px 16px; border-radius:6px; border:1px solid var(--border);
+  background:var(--elevated); color:var(--text); cursor:pointer;
+  transition: all 0.15s;
+}
+.btn:hover { border-color:var(--text2); }
+.btn-green { background:rgba(0,200,83,0.12); border-color:var(--green); color:var(--green); }
+.btn-green:hover { background:rgba(0,200,83,0.25); }
+.btn-red { background:rgba(248,81,73,0.12); border-color:var(--red); color:var(--red); }
+.btn-red:hover { background:rgba(248,81,73,0.25); }
+.power-input {
+  font-family:var(--mono); font-size:14px; width:80px; padding:7px 10px;
+  border-radius:6px; border:1px solid var(--border); background:var(--bg);
+  color:var(--text); text-align:right;
+}
+.power-input:focus { outline:none; border-color:var(--green); }
+
+/* Tooltip */
+.tooltip {
+  position:fixed; pointer-events:none; z-index:100;
+  background:var(--elevated); border:1px solid var(--border);
+  border-radius:6px; padding:8px 12px; font-size:12px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.5); display:none;
+}
+.tooltip .tt-ip { font-family:var(--mono); font-weight:600; }
+.tooltip .tt-row { color:var(--text2); margin-top:2px; }
