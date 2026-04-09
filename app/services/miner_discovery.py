@@ -1043,16 +1043,16 @@ class MinerDiscoveryService:
     def register_waking_miner(self, ip: str):
         """Register a miner that needs HTTP pokes to complete its wake."""
         self._waking_miners[ip] = datetime.utcnow()
-        logger.debug("Registered waking miner for poke", ip=ip,
-                     total_waking=len(self._waking_miners))
+        logger.info("Registered waking miner for poke", ip=ip,
+                    total_waking=len(self._waking_miners))
     
     def unregister_waking_miner(self, ip: str):
         """Remove a miner from the poke list (it started mining or was slept)."""
         if ip in self._waking_miners:
             elapsed = (datetime.utcnow() - self._waking_miners[ip]).total_seconds()
             del self._waking_miners[ip]
-            logger.debug("Unregistered waking miner", ip=ip, boot_time_s=round(elapsed),
-                         remaining=len(self._waking_miners))
+            logger.info("Unregistered waking miner", ip=ip, boot_time_s=round(elapsed),
+                        remaining=len(self._waking_miners))
     
     async def _poke_one(self, ip: str) -> bool:
         """Send a single HTTP poke to stimulate firmware wake."""
@@ -1137,9 +1137,9 @@ class MinerDiscoveryService:
                 await asyncio.gather(*poke_tasks, return_exceptions=True)
                 
                 if len(poke_targets) >= 5:
-                    logger.debug("Poke round complete",
-                                 poked=len(poke_targets),
-                                 rewaked=len(rewake_targets))
+                    logger.info("Poke round complete",
+                                poked=len(poke_targets),
+                                rewaked=len(rewake_targets))
                 
             except asyncio.CancelledError:
                 raise
