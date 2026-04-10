@@ -1,0 +1,316 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - img [ref=e5]
+      - heading "TransmitX × Cryptohall24" [level=1] [ref=e7]:
+        - generic [ref=e8]: TransmitX
+        - generic [ref=e9]: ×
+        - generic [ref=e10]: Cryptohall24
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: Total Hashrate
+        - generic [ref=e14]: 0 GH/s
+      - generic [ref=e15]:
+        - generic [ref=e16]: Meter Power
+        - generic [ref=e17]: 0.0 kW
+      - generic [ref=e20]: Connecting...
+      - generic [ref=e21]:
+        - generic [ref=e22]: Updated
+        - generic [ref=e23]: "--"
+  - main [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - generic [ref=e29]:
+              - generic [ref=e30]: ●
+              - generic [ref=e31]: LOADING
+            - generic [ref=e32]: Initializing system...
+          - generic [ref=e33]:
+            - generic [ref=e34]:
+              - generic [ref=e35]: "0"
+              - generic [ref=e36]: Online
+            - generic [ref=e37]: /
+            - generic [ref=e38]:
+              - generic [ref=e39]: "0"
+              - generic [ref=e40]: Total
+            - generic [ref=e41]:
+              - generic [ref=e42]: "0"
+              - generic [ref=e43]: Mining
+        - generic [ref=e44]:
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - img [ref=e47]
+              - generic [ref=e49]:
+                - text: Total Hashrate
+                - img [ref=e50]
+            - generic [ref=e52]: 0.00 TH/s
+          - generic [ref=e54]:
+            - generic [ref=e55]:
+              - img [ref=e56]
+              - generic [ref=e58]:
+                - text: Avg Temperature
+                - img [ref=e59]
+            - generic [ref=e61]: "-- °C"
+          - generic [ref=e63]:
+            - generic [ref=e64]:
+              - img [ref=e65]
+              - generic [ref=e68]:
+                - text: Efficiency
+                - img [ref=e69]
+            - generic [ref=e71]: "-- GH/W"
+        - generic [ref=e73]:
+          - generic [ref=e74]:
+            - generic [ref=e75]:
+              - text: Fleet Power
+              - generic "Power data source" [ref=e76]: EST
+            - generic [ref=e77]: 0.0 / 0.0 kW
+          - generic [ref=e78]: −5% +5%
+          - generic [ref=e79]:
+            - generic [ref=e80]: 0%
+            - generic [ref=e81]: 0%
+            - generic [ref=e82]: 100%
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - generic [ref=e85]: Meter (miners)
+              - generic [ref=e86]: "-- kW"
+            - generic [ref=e87]:
+              - generic [ref=e88]: Meter (plant)
+              - generic [ref=e89]: "-- kW"
+            - generic [ref=e90]:
+              - generic [ref=e91]: Voltage
+              - generic [ref=e92]: "-- V"
+            - generic [ref=e93]:
+              - generic [ref=e94]: Miner estimates
+              - generic [ref=e95]: "-- kW"
+      - generic [ref=e96]:
+        - heading "EMS Protocol Status" [level=3] [ref=e97]:
+          - img [ref=e98]
+          - generic [ref=e102]:
+            - text: EMS Protocol Status
+            - img [ref=e103]
+        - generic [ref=e105]:
+          - generic [ref=e106]:
+            - generic [ref=e107]:
+              - text: Available for Dispatch
+              - img [ref=e108]
+            - generic [ref=e110]: "NO"
+          - generic [ref=e111]:
+            - generic [ref=e112]:
+              - text: Running Status
+              - img [ref=e113]
+            - generic [ref=e115]: STANDBY
+          - generic [ref=e116]:
+            - generic [ref=e117]:
+              - text: Target Power
+              - img [ref=e118]
+            - generic [ref=e120]: "-- kW"
+          - generic [ref=e121]:
+            - generic [ref=e122]: Last EMS Command
+            - generic [ref=e123]: "--"
+          - generic [ref=e124]:
+            - generic [ref=e125]: Regulation Timer
+            - generic [ref=e126]: "--:--"
+        - generic [ref=e127]:
+          - code [ref=e128]: GET /api/status
+          - code [ref=e129]: POST /api/activate
+          - code [ref=e130]: POST /api/deactivate
+    - generic [ref=e131]:
+      - generic [ref=e132]:
+        - heading "Section Processes" [level=2] [ref=e133]:
+          - img [ref=e134]
+          - text: Section Processes
+        - generic [ref=e136]: Process-Isolated
+      - generic [ref=e138]: Loading section data...
+    - generic [ref=e139]:
+      - generic [ref=e140]:
+        - heading "Historical Data" [level=2] [ref=e141]:
+          - img [ref=e142]
+          - text: Historical Data
+        - generic [ref=e143]:
+          - generic [ref=e144]:
+            - button "5M" [ref=e145] [cursor=pointer]
+            - button "15M" [ref=e146] [cursor=pointer]
+            - button "1H" [ref=e147] [cursor=pointer]
+            - button "6H" [ref=e148] [cursor=pointer]
+            - button "24H" [ref=e149] [cursor=pointer]
+          - combobox [ref=e150] [cursor=pointer]:
+            - option "Entire Fleet" [selected]
+      - generic [ref=e151]:
+        - generic [ref=e153]:
+          - generic [ref=e154]: Hashrate
+          - generic [ref=e155]: "-- TH/s"
+        - generic [ref=e159]:
+          - generic [ref=e160]: Power Consumption
+          - generic [ref=e161]: "-- kW"
+        - generic [ref=e165]:
+          - generic [ref=e166]: Temperature
+          - generic [ref=e167]: "-- °C"
+    - generic [ref=e170]:
+      - generic [ref=e171]:
+        - heading "Network Discovery" [level=2] [ref=e172]:
+          - img [ref=e173]
+          - text: Network Discovery
+        - generic [ref=e176]:
+          - generic [ref=e177]:
+            - generic [ref=e178]: "Network:"
+            - generic [ref=e179]: "--"
+          - generic [ref=e180]:
+            - generic [ref=e181]: "Last Scan:"
+            - generic [ref=e182]: "--"
+      - generic [ref=e183]:
+        - button "Scan Network" [ref=e184] [cursor=pointer]:
+          - img [ref=e185]
+          - text: Scan Network
+        - generic [ref=e189]:
+          - button "Add Miner" [ref=e190] [cursor=pointer]:
+            - img [ref=e191]
+            - text: Add Miner
+          - textbox "IP Address" [ref=e192]
+          - spinbutton [ref=e193]: "1400"
+    - generic [ref=e194]:
+      - heading "Fleet Control" [level=2] [ref=e196]:
+        - img [ref=e197]
+        - text: Fleet Control
+      - generic [ref=e199]:
+        - generic [ref=e200]:
+          - button "Sleep All" [ref=e201] [cursor=pointer]:
+            - img [ref=e202]
+            - text: Sleep All
+          - button "Wake All" [ref=e205] [cursor=pointer]:
+            - img [ref=e206]
+            - text: Wake All
+          - button "Emergency Stop" [ref=e208] [cursor=pointer]:
+            - img [ref=e209]
+            - text: Emergency Stop
+        - generic [ref=e211]:
+          - generic [ref=e212]:
+            - slider "Drag to set target power" [ref=e213] [cursor=pointer]: "0"
+            - generic [ref=e214]:
+              - generic [ref=e215]: "0"
+              - generic [ref=e216]: 0.0 kW
+              - generic [ref=e217]: Max
+          - generic [ref=e218]:
+            - spinbutton "Enter exact power target in kW" [ref=e219]
+            - generic [ref=e220]: kW
+          - button "Set Power" [ref=e221] [cursor=pointer]
+    - generic [ref=e222]:
+      - generic [ref=e223]:
+        - heading "Mining Fleet" [level=2] [ref=e224]:
+          - img [ref=e225]
+          - text: Mining Fleet
+        - generic [ref=e228]:
+          - button "Grid View" [ref=e229] [cursor=pointer]:
+            - img [ref=e230]
+          - button "Table View" [ref=e235] [cursor=pointer]:
+            - img [ref=e236]
+          - button "Rack View" [ref=e237] [cursor=pointer]:
+            - img [ref=e238]
+      - generic [ref=e247]:
+        - generic [ref=e248]:
+          - generic [ref=e249]: Mining
+          - generic [ref=e251]: Idle
+          - generic [ref=e253]: Offline
+        - generic [ref=e255]:
+          - generic [ref=e256]:
+            - generic [ref=e257]: "0"
+            - generic [ref=e258]: Miners
+          - generic [ref=e259]:
+            - generic [ref=e260]: 0 TH/s
+            - generic [ref=e261]: Hashrate
+          - generic [ref=e262]:
+            - generic [ref=e263]: 0 kW
+            - generic [ref=e264]: Power
+    - generic [ref=e265]:
+      - generic [ref=e266]:
+        - heading "Fleet Health & Anomaly Detection" [level=2] [ref=e267]:
+          - img [ref=e268]
+          - text: Fleet Health & Anomaly Detection
+        - generic [ref=e270]:
+          - generic [ref=e271]: 0 Critical
+          - generic [ref=e272]: 6 Warnings
+          - generic [ref=e273]: 0 Info
+      - generic [ref=e274]:
+        - generic [ref=e275]:
+          - generic [ref=e276]:
+            - img [ref=e278]
+            - generic [ref=e281]:
+              - generic [ref=e282]: 97.2%
+              - generic [ref=e283]: Fleet Availability
+          - generic [ref=e284]:
+            - img [ref=e286]
+            - generic [ref=e288]:
+              - generic [ref=e289]: 0.0 kW
+              - generic [ref=e290]: Max Sustained Power
+          - generic [ref=e291]:
+            - img [ref=e293]
+            - generic [ref=e295]:
+              - generic [ref=e296]: ±0%
+              - generic [ref=e297]: Hashrate Variance
+          - generic [ref=e298]:
+            - img [ref=e300]
+            - generic [ref=e302]:
+              - generic [ref=e303]: 0°C
+              - generic [ref=e304]: Temp Spread
+          - generic [ref=e305]:
+            - img [ref=e307]
+            - generic [ref=e310]:
+              - generic [ref=e311]: "--"
+              - generic [ref=e312]: Efficiency Score
+          - generic [ref=e313]:
+            - img [ref=e315]
+            - generic [ref=e317]:
+              - generic [ref=e318]: 0/hr
+              - generic [ref=e319]: Anomaly Rate
+        - generic [ref=e320]:
+          - generic [ref=e321]:
+            - generic [ref=e322]: Fleet Anomalies
+            - button "Clear All" [ref=e323] [cursor=pointer]
+          - generic [ref=e324]:
+            - generic [ref=e325]:
+              - img [ref=e326]
+              - generic [ref=e328]:
+                - generic [ref=e329]: "Temperature spread too high: 43°C (hottest: 192.168.95.35)"
+                - generic [ref=e331]: 10.4.2026, 13:49:45
+            - generic [ref=e332]:
+              - img [ref=e333]
+              - generic [ref=e335]:
+                - generic [ref=e336]: "High temperature: 85°C"
+                - generic [ref=e337]:
+                  - generic [ref=e338]: 192.168.95.35
+                  - generic [ref=e339]: 10.4.2026, 13:49:45
+            - generic [ref=e340]:
+              - img [ref=e341]
+              - generic [ref=e343]:
+                - generic [ref=e344]: "Temperature spread too high: 43°C (hottest: 192.168.95.35)"
+                - generic [ref=e346]: 10.4.2026, 13:39:45
+            - generic [ref=e347]:
+              - img [ref=e348]
+              - generic [ref=e350]:
+                - generic [ref=e351]: "High temperature: 85°C"
+                - generic [ref=e352]:
+                  - generic [ref=e353]: 192.168.95.35
+                  - generic [ref=e354]: 10.4.2026, 13:39:45
+            - generic [ref=e355]:
+              - img [ref=e356]
+              - generic [ref=e358]:
+                - generic [ref=e359]: "Temperature spread too high: 43°C (hottest: 192.168.95.35)"
+                - generic [ref=e361]: 10.4.2026, 13:29:37
+            - generic [ref=e362]:
+              - img [ref=e363]
+              - generic [ref=e365]:
+                - generic [ref=e366]: "High temperature: 85°C"
+                - generic [ref=e367]:
+                  - generic [ref=e368]: 192.168.95.35
+                  - generic [ref=e369]: 10.4.2026, 13:29:37
+    - generic [ref=e371] [cursor=pointer]:
+      - heading "Command History" [level=2] [ref=e372]:
+        - img [ref=e373]
+        - text: Command History
+      - img [ref=e377]
+  - contentinfo [ref=e379]:
+    - generic [ref=e380]: TransmitX × Cryptohall24
+    - generic [ref=e381]: ·
+    - generic [ref=e382]: Grid Stabilization v1.0
+    - generic [ref=e383]: ·
+    - generic [ref=e384]: Polling every 3s

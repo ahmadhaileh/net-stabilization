@@ -356,7 +356,7 @@ function updateStatusDisplay() {
         }
     }
     if (meterEstimated) {
-        const estPower = state.status.active_power_kw || 0;
+        const estPower = state.status.estimated_power_kw || 0;
         meterEstimated.textContent = estPower.toFixed(2) + ' kW';
     }
 

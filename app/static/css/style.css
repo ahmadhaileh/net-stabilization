@@ -2786,7 +2786,7 @@ svg.stat-icon {
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .rack-section-header {
@@ -2796,6 +2796,7 @@ svg.stat-icon {
     padding: var(--space-2) var(--space-3);
     background: var(--bg-elevated);
     border-bottom: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     cursor: pointer;
     transition: background 0.15s;
 }
@@ -2822,6 +2823,8 @@ svg.stat-icon {
     grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
     gap: 4px;
     padding: var(--space-3);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    background: var(--bg-elevated);
 }
 
 .rack-slot {

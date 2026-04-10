@@ -30,6 +30,7 @@ class FleetStatusResponse(BaseModel):
     running_status: int
     rated_power_kw: float
     active_power_kw: float
+    estimated_power_kw: float = 0.0
     measured_power_kw: Optional[float] = None
     plant_power_kw: Optional[float] = None
     voltage: Optional[float] = None
@@ -62,6 +63,7 @@ async def get_fleet_status():
         running_status=s["running_status"],
         rated_power_kw=s["rated_power_kw"],
         active_power_kw=s["active_power_kw"],
+        estimated_power_kw=s.get("estimated_power_kw", 0),
         measured_power_kw=s.get("measured_power_kw"),
         plant_power_kw=s.get("plant_power_kw"),
         voltage=s.get("voltage"),

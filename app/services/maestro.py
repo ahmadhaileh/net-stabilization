@@ -245,6 +245,11 @@ class Maestro:
         return sum(s.get_status().get("active_power_kw", 0) for s in self.sections)
 
     @property
+    def estimated_power_kw(self) -> float:
+        """Sum of per-miner power estimates from section processes."""
+        return sum(s.get_status().get("active_power_kw", 0) for s in self.sections)
+
+    @property
     def is_available(self) -> bool:
         return self._state in (FleetState.STANDBY, FleetState.RUNNING)
 
@@ -269,6 +274,7 @@ class Maestro:
             "running_status": self.running_status.value,
             "rated_power_kw": round(self.rated_power_kw, 1),
             "active_power_kw": round(self.active_power_kw, 1),
+            "estimated_power_kw": round(self.estimated_power_kw, 1),
             "measured_power_kw": round(self._last_meter_kw, 1) if self._last_meter_kw is not None else None,
             "plant_power_kw": round(self._last_plant_kw, 1) if self._last_plant_kw is not None else None,
             "voltage": round(self._last_voltage, 1) if self._last_voltage is not None else None,
