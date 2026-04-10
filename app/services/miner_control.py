@@ -284,39 +284,79 @@ def _parse_cgminer_summary(miner: Miner, data: dict):
 
 
 def _parse_vnish_status(miner: Miner, data: Any):
-    """Extract stats from Vnish get_miner_status.cgi response."""
+    """Extract stats from Vnish get_miner_status.cgi response.
+
+    Response format:
+    {
+      "summary": {"ghsav": 4428.24, "ghs5s": "4633.464", ...},
+      "pools": [...],
+      "devs": [
+        {"index":"6", "temp":"71", "temp2":"82", "rate":"4627.47",
+         "fan5":"5520", "fan6":"4200", "chain_consumption":"502", ...},
+        ...
+      ]
+    }
+    """
     if not isinstance(data, dict):
         return
     try:
-        # Power
-        power = float(data.get("Power", 0))
-        miner.power_watts = min(power, MAX_POWER_WATTS)
+        summary = data.get("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
 
-        # Hashrate — Vnish reports in GH/s
-        raw_ghs = float(data.get("GHSav", data.get("GHS5s", 0)))
+        # Hashrate — nested in summary, lowercase keys
+        raw_ghs = float(summary.get("ghsav", summary.get("ghs5s", 0)) or 0)
         miner.hashrate_ghs = min(raw_ghs, MAX_HASHRATE_GHS)
 
-        # Temperature — max across boards
-        temps = []
-        for chain in data.get("chain", []):
-            t = chain.get("temp_chip", chain.get("temp_pcb", 0))
-            if isinstance(t, (int, float)) and t > 0:
-                temps.append(float(t))
-        if temps:
-            miner.temperature_c = max(temps)
+        # Power — sum chain_consumption across devs (watts per chain)
+        devs = data.get("devs", [])
+        if isinstance(devs, list):
+            total_watts = 0
+            for dev in devs:
+                if not isinstance(dev, dict):
+                    continue
+                try:
+                    consumption = dev.get("chain_consumption", 0)
+                    if consumption and str(consumption) not in ("null", ""):
+                        total_watts += float(consumption)
+                except (ValueError, TypeError):
+                    pass
+            if total_watts > 0:
+                miner.power_watts = min(total_watts, MAX_POWER_WATTS)
 
-        # Fans
-        fans = data.get("fan", [])
-        if fans and isinstance(fans, list):
-            fan_speeds = [f for f in fans if isinstance(f, (int, float)) and f > 0]
+            # Temperature — max of temp2 (chip temp) across devs
+            temps = []
+            for dev in devs:
+                if not isinstance(dev, dict):
+                    continue
+                for key in ("temp2", "temp"):
+                    try:
+                        t = float(dev.get(key, 0) or 0)
+                        if t > 0:
+                            temps.append(t)
+                            break
+                    except (ValueError, TypeError):
+                        pass
+            if temps:
+                miner.temperature_c = max(temps)
+
+            # Fans — fanN keys in first dev that has them
+            fan_speeds = []
+            for dev in devs:
+                if not isinstance(dev, dict):
+                    continue
+                for key in ("fan1", "fan2", "fan3", "fan4", "fan5", "fan6", "fan7", "fan8"):
+                    try:
+                        speed = float(dev.get(key, 0) or 0)
+                        if speed > 0:
+                            fan_speeds.append(speed)
+                    except (ValueError, TypeError):
+                        pass
+                if fan_speeds:
+                    break  # Only first dev with fans
             if fan_speeds:
                 miner.fan_speed_pct = sum(fan_speeds) / len(fan_speeds)
 
-        # Identity
-        if not miner.firmware:
-            miner.firmware = str(data.get("CompileTime", ""))
-        if not miner.model:
-            miner.model = str(data.get("Type", ""))
     except (ValueError, TypeError):
         pass
 
