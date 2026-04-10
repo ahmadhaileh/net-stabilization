@@ -233,23 +233,13 @@ async def poll_miner(miner: Miner) -> MinerState:
     Poll a single miner and update its state in-place.
 
     Strategy:
-    1. Try CGMiner TCP summary (fast, reliable when mining)
-    2. If that fails, try Vnish HTTP status (web server stays up in sleep)
+    1. Try Vnish HTTP status (web server stays up in all states)
+    2. If that fails, try CGMiner TCP summary (fast when mining)
     3. If both fail, mark offline
 
     Returns the new state.
     """
-    # Try CGMiner first — fast path for mining miners
-    summary = await cgminer_command(miner.ip, "summary", timeout=3.0)
-    if summary and "SUMMARY" in summary:
-        _parse_cgminer_summary(miner, summary)
-        if miner.hashrate_ghs > 0:
-            miner.state = MinerState.MINING
-            miner.consecutive_failures = 0
-            miner.last_seen = datetime.utcnow()
-            return MinerState.MINING
-
-    # Try Vnish HTTP — sleeping miners have web server up
+    # Try Vnish HTTP first — web server stays up in sleep and mining
     ok, status_data = await _vnish_request(
         miner.ip, "/cgi-bin/get_miner_status.cgi", timeout=3.0
     )
@@ -257,19 +247,23 @@ async def poll_miner(miner: Miner) -> MinerState:
         _parse_vnish_status(miner, status_data)
         miner.consecutive_failures = 0
         miner.last_seen = datetime.utcnow()
-        # If hashrate > 0, it's mining; otherwise it's sleeping/idle
         if miner.hashrate_ghs > 0:
             miner.state = MinerState.MINING
         else:
             miner.state = MinerState.SLEEPING
         return miner.state
 
-    # CGMiner responded but with 0 hashrate and vnish down — could be booting
+    # Try CGMiner TCP — some miners may have web UI down but CGMiner up
+    summary = await cgminer_command(miner.ip, "summary", timeout=3.0)
     if summary and "SUMMARY" in summary:
-        miner.state = MinerState.SLEEPING  # CGMiner up but not hashing
+        _parse_cgminer_summary(miner, summary)
         miner.consecutive_failures = 0
         miner.last_seen = datetime.utcnow()
-        return MinerState.SLEEPING
+        if miner.hashrate_ghs > 0:
+            miner.state = MinerState.MINING
+        else:
+            miner.state = MinerState.SLEEPING
+        return miner.state
 
     # Both failed
     miner.consecutive_failures += 1
@@ -331,8 +325,10 @@ def _parse_vnish_status(miner: Miner, data: Any):
 
 async def discover_miners(network_cidr: str, timeout: float = 1.0) -> List[str]:
     """
-    Scan a network for miners by probing CGMiner port 4028.
+    Scan a network for miners by probing Vnish web server (port 80).
 
+    Port 80 stays up in all states: mining, sleeping, and crashed CGMiner.
+    Port 4028 (CGMiner) is only up when actively mining.
     Returns list of IPs that responded.
     """
     import ipaddress
@@ -344,7 +340,7 @@ async def discover_miners(network_cidr: str, timeout: float = 1.0) -> List[str]:
     async def _probe(ip_str: str):
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip_str, settings.miner_api_port),
+                asyncio.open_connection(ip_str, settings.vnish_port),
                 timeout=timeout,
             )
             writer.close()
