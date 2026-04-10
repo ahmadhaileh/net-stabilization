@@ -2787,6 +2787,11 @@ svg.stat-icon {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     overflow: visible;
+    position: relative;
+}
+
+.rack-section-group:hover {
+    z-index: 10;
 }
 
 .rack-section-header {
