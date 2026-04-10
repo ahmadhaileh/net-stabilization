@@ -6560,3 +6560,180 @@ body {
 .section-test-failed.hidden {
     display: none;
 }
+
+/* =========================================================================
+   Sections Overview (Process-Isolated Architecture)
+   ========================================================================= */
+.sections-overview {
+    background: var(--card-bg, #1e1e2e);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.sections-overview .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.sections-overview .section-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.architecture-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, #00c853, #2196f3);
+    color: #fff;
+}
+
+.sections-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.section-empty {
+    color: var(--text-secondary, #888);
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 16px;
+}
+
+.section-card {
+    background: var(--bg-tertiary, #252538);
+    border-radius: 8px;
+    padding: 14px;
+    border-left: 4px solid var(--border-color, #444);
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.section-card:hover {
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.section-card.mining {
+    border-left-color: #00c853;
+}
+
+.section-card.idle {
+    border-left-color: #ffc107;
+}
+
+.section-card.offline {
+    border-left-color: #ff5252;
+}
+
+.section-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.section-card-title {
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-card-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-card-status .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #888;
+}
+
+.section-card-status.mining .status-dot {
+    background: #00c853;
+    box-shadow: 0 0 6px rgba(0, 200, 83, 0.5);
+}
+
+.section-card-status.idle .status-dot {
+    background: #ffc107;
+}
+
+.section-card-status.offline .status-dot {
+    background: #ff5252;
+}
+
+.section-card-status.mining {
+    color: #00c853;
+}
+
+.section-card-status.idle {
+    color: #ffc107;
+}
+
+.section-card-status.offline {
+    color: #ff5252;
+}
+
+.section-card-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.section-stat {
+    text-align: center;
+}
+
+.section-stat-value {
+    display: block;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary, #e6edf3);
+    line-height: 1.2;
+}
+
+.section-stat-label {
+    display: block;
+    font-size: 10px;
+    color: var(--text-secondary, #888);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-card-bar {
+    height: 4px;
+    background: var(--border-color, #333);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.section-card-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #00c853, #2196f3);
+    transition: width 0.5s ease;
+}
+
+.section-card-footer {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+}

@@ -3,6 +3,9 @@ Dashboard API — provides endpoints for the web dashboard.
 
 These are internal APIs, NOT part of the EMS protocol.
 They bridge the dashboard JS to the Maestro.
+
+All data comes from the Maestro's aggregated status (read from section
+processes via IPC queues). This API never touches individual miners directly.
 """
 from datetime import datetime
 from typing import List, Optional
@@ -12,14 +15,7 @@ from pydantic import BaseModel, Field
 import structlog
 
 from app.services.maestro import get_maestro
-from app.services.miner_control import (
-    Miner,
-    MinerState,
-    sleep_miner,
-    wake_miner,
-    poll_miner,
-    discover_miners,
-)
+from app.services.miner_control import discover_miners
 
 logger = structlog.get_logger()
 
@@ -35,34 +31,16 @@ class FleetStatusResponse(BaseModel):
     rated_power_kw: float
     active_power_kw: float
     measured_power_kw: Optional[float] = None
-    plant_power_kw: Optional[float] = None
-    estimated_power_kw: float = 0.0
     voltage: Optional[float] = None
     power_source: str = "estimate"
     target_power_kw: Optional[float] = None
     total_miners: int = 0
     online_miners: int = 0
     mining_miners: int = 0
-    manual_override_active: bool = False
-    override_target_power_kw: Optional[float] = None
+    sleeping_miners: int = 0
     last_update: datetime = Field(default_factory=datetime.utcnow)
     last_ems_command: Optional[datetime] = None
     errors: List[str] = Field(default_factory=list)
-    power_control_mode: str = "on_off"
-    dev_mode: bool = False
-    active_sections: Optional[List[int]] = None
-
-
-class MinerStatusResponse(BaseModel):
-    miner_id: str
-    name: str
-    is_online: bool
-    is_mining: bool
-    power_kw: float
-    rated_power_kw: float
-    target_power_kw: Optional[float] = None
-    last_update: datetime = Field(default_factory=datetime.utcnow)
-    error: Optional[str] = None
 
 
 class ManualControlRequest(BaseModel):
@@ -90,6 +68,7 @@ async def get_fleet_status():
         total_miners=s["total_miners"],
         online_miners=s["online_miners"],
         mining_miners=s["mining_miners"],
+        sleeping_miners=s.get("sleeping_miners", 0),
         last_update=datetime.utcnow(),
         last_ems_command=datetime.fromisoformat(s["last_ems_command"]) if s.get("last_ems_command") else None,
     )
@@ -97,28 +76,14 @@ async def get_fleet_status():
 
 @router.get("/discovery/miners")
 async def get_discovery_miners():
-    """Get all miners across all sections."""
+    """Get all miners across all sections (from process-isolated status)."""
     maestro = get_maestro()
+    status = maestro.get_status()
     miners = []
 
-    for section in maestro.sections:
-        for ip, miner in section.miners.items():
-            miners.append({
-                "ip": ip,
-                "id": ip.replace(".", "_"),
-                "model": miner.model,
-                "firmware": miner.firmware,
-                "mac_address": miner.mac_address,
-                "is_online": miner.state != MinerState.OFFLINE,
-                "is_mining": miner.state == MinerState.MINING,
-                "hashrate_ghs": round(miner.hashrate_ghs, 1),
-                "power_watts": round(miner.power_watts, 1),
-                "temperature_c": round(miner.temperature_c, 1),
-                "fan_speed_pct": round(miner.fan_speed_pct, 1),
-                "state": miner.state.value,
-                "section": section.section_id,
-                "last_seen": miner.last_seen.isoformat() if miner.last_seen else None,
-            })
+    for section_status in status.get("sections", []):
+        for miner in section_status.get("miners", []):
+            miners.append(miner)
 
     return {"miners": miners, "total": len(miners)}
 
@@ -129,12 +94,17 @@ async def health_check():
     maestro = get_maestro()
     s = maestro.get_status()
 
+    # Check which section processes are alive
+    sections_alive = sum(1 for sec in maestro.sections if sec.is_alive)
+
     return {
         "healthy": True,
         "mode": "maestro",
+        "architecture": "process-isolated",
         "services": {
             "maestro": True,
-            "sections": len(maestro.sections),
+            "sections_total": len(maestro.sections),
+            "sections_alive": sections_alive,
             "power_meter": maestro.power_meter.is_healthy,
         },
         "miners_registered": s["total_miners"],
@@ -144,21 +114,19 @@ async def health_check():
     }
 
 
-@router.get("/history")
-async def get_history(limit: int = 100):
-    """Get command history (stub — to be backed by DB)."""
-    return {"commands": []}
-
-
 # ── Sections ──────────────────────────────────────────────────────
 
 @router.get("/sections")
 async def get_sections():
-    """Get status of all sections."""
+    """Get status of all sections including process health."""
     maestro = get_maestro()
-    return {
-        "sections": [s.get_status() for s in maestro.sections]
-    }
+    sections = []
+    for sec in maestro.sections:
+        status = sec.get_status()
+        status["process_alive"] = sec.is_alive
+        sections.append(status)
+
+    return {"sections": sections}
 
 
 # ── Miner Control ────────────────────────────────────────────────
@@ -166,40 +134,34 @@ async def get_sections():
 @router.post("/miners/{miner_id}/control")
 async def control_miner(miner_id: str, request: ManualControlRequest):
     """
-    Manually control a miner.
-    
-    Actions: start (wake), stop (sleep).
+    Manually control a miner via its section process.
+
+    Commands funnel: Dashboard → API → Maestro → SectionProcess → Miner
     miner_id is the IP with dots replaced by underscores.
     """
     ip = miner_id.replace("_", ".")
     maestro = get_maestro()
 
-    # Find the miner across sections
-    miner = None
-    for section in maestro.sections:
-        if ip in section.miners:
-            miner = section.miners[ip]
-            break
+    # Find which section owns this miner
+    section = maestro.find_section_for_miner(ip)
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Miner {ip} not found in any section")
 
-    if not miner:
-        raise HTTPException(status_code=404, detail=f"Miner {ip} not found")
+    # Send command through the section process (funneled downward)
+    section.control_miner(ip, request.action)
 
-    if request.action == "start":
-        ok = await wake_miner(ip)
-        msg = "Wake command sent" if ok else "Wake failed"
-    elif request.action == "stop":
-        ok = await sleep_miner(ip)
-        msg = "Sleep command sent" if ok else "Sleep failed"
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {request.action}")
-
-    logger.info("manual_miner_control", ip=ip, action=request.action, success=ok)
+    logger.info(
+        "manual_miner_control",
+        ip=ip,
+        action=request.action,
+        section=section.section_id,
+    )
 
     return {
-        "success": ok,
+        "success": True,
         "miner_id": miner_id,
         "action": request.action,
-        "message": msg,
+        "message": f"{'Wake' if request.action == 'start' else 'Sleep'} command sent via {section.section_id}",
     }
 
 

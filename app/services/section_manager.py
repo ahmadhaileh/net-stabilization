@@ -382,3 +382,29 @@ class SectionManager:
             "expected_power_kw": round(self.expected_power_kw, 1),
             "target_power_kw": round(self._target_power_kw, 1) if self._target_power_kw is not None else None,
         }
+
+    def get_full_status(self) -> dict:
+        """Return section status including per-miner details (for IPC)."""
+        status = self.get_status()
+        status["miners"] = []
+        for ip, m in self.miners.items():
+            status["miners"].append({
+                "ip": ip,
+                "id": ip.replace(".", "_"),
+                "state": m.state.value,
+                "is_online": m.state != MinerState.OFFLINE,
+                "is_mining": m.state == MinerState.MINING,
+                "hashrate_ghs": round(m.hashrate_ghs, 1),
+                "power_watts": round(m.power_watts, 1),
+                "power_kw": round(m.power_kw, 3),
+                "temperature_c": round(m.temperature_c, 1),
+                "fan_speed_pct": round(m.fan_speed_pct, 1),
+                "uptime_seconds": m.uptime_seconds,
+                "model": m.model or "",
+                "firmware": m.firmware or "",
+                "mac_address": m.mac_address or "",
+                "pool_url": m.pool_url or "",
+                "last_seen": m.last_seen.isoformat() if m.last_seen else None,
+                "section": self.section_id,
+            })
+        return status

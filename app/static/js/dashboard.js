@@ -10,6 +10,9 @@ const CONFIG = {
     emsBase: '/api',
 };
 
+// S9 rated power constant (API no longer sends per-miner rated power)
+const RATED_POWER_KW = 1.4;
+
 // State
 let state = {
     connected: false,
@@ -41,15 +44,8 @@ function setupEventListeners() {
 
     // Power control
     $('btn-set-power')?.addEventListener('click', handleSetPower);
-    $('btn-preview-power')?.addEventListener('click', handlePreviewPower);
     $('power-slider')?.addEventListener('input', handleSliderChange);
     $('power-input')?.addEventListener('change', handlePowerInputChange);
-
-    // Override toggle
-    $('override-toggle')?.addEventListener('change', handleOverrideToggle);
-    
-    // Power mode select
-    $('power-mode-select')?.addEventListener('change', handlePowerModeChange);
 
     // Discovery
     $('btn-scan')?.addEventListener('click', handleScan);
@@ -78,12 +74,12 @@ function setupEventListeners() {
 // =========================================================================
 
 async function startPolling() {
-    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchHistory(), fetchSectionTest()]);
+    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchHistory(), fetchSections()]);
 
     setInterval(fetchStatus, CONFIG.pollInterval);
     setInterval(fetchDiscoveredMiners, CONFIG.pollInterval);
     setInterval(fetchHistory, 10000);
-    setInterval(fetchSectionTest, CONFIG.pollInterval);
+    setInterval(fetchSections, CONFIG.pollInterval);
     setInterval(updateRegulationTimer, 1000);
 }
 
@@ -153,15 +149,16 @@ async function fetchHistory() {
     }
 }
 
-// Section test polling
-let sectionTestState = { running: false, sections: [], current_section: null, started_at: null };
+// Sections state
+let sectionsState = [];
 
-async function fetchSectionTest() {
+async function fetchSections() {
     try {
-        const response = await fetch(`${CONFIG.apiBase}/section_test`);
+        const response = await fetch(`${CONFIG.apiBase}/sections`);
         if (response.ok) {
-            sectionTestState = await response.json();
-            updateSectionTestDisplay();
+            const data = await response.json();
+            sectionsState = data.sections || [];
+            updateSectionsDisplay();
         }
     } catch (error) { /* ignore */ }
 }
@@ -329,15 +326,9 @@ function updateStatusDisplay() {
         }
     }
     if (meterPlant) {
-        if (state.status.plant_power_kw !== null && state.status.plant_power_kw !== undefined) {
-            meterPlant.textContent = state.status.plant_power_kw.toFixed(2) + ' kW';
-            meterPlant.classList.add('meter-live');
-            meterPlant.classList.remove('meter-offline');
-        } else {
-            meterPlant.textContent = '-- kW';
-            meterPlant.classList.add('meter-offline');
-            meterPlant.classList.remove('meter-live');
-        }
+        meterPlant.textContent = '-- kW';
+        meterPlant.classList.add('meter-offline');
+        meterPlant.classList.remove('meter-live');
     }
     // Voltage display with power-loss warning
     const meterVoltage = $('meter-voltage');
@@ -360,7 +351,8 @@ function updateStatusDisplay() {
         }
     }
     if (meterEstimated) {
-        meterEstimated.textContent = (state.status.estimated_power_kw || 0).toFixed(2) + ' kW';
+        const estPower = state.status.active_power_kw || 0;
+        meterEstimated.textContent = estPower.toFixed(2) + ' kW';
     }
 
     // Update slider max
@@ -409,29 +401,6 @@ function updateStatusDisplay() {
     } else if (state.status.last_ems_command) {
         $('ems-last-cmd').textContent = new Date(state.status.last_ems_command).toLocaleString();
     }
-
-    // Dev mode badge
-    const devBadge = $('dev-mode-badge');
-    if (devBadge) {
-        if (state.status.dev_mode) {
-            devBadge.classList.remove('hidden');
-        } else {
-            devBadge.classList.add('hidden');
-        }
-    }
-
-    // Override badge
-    const overrideBadge = $('override-badge');
-    if (state.status.manual_override_active) {
-        overrideBadge.classList.remove('hidden');
-        $('override-toggle').checked = true;
-    } else {
-        overrideBadge.classList.add('hidden');
-        $('override-toggle').checked = false;
-    }
-    
-    // Power mode toggle
-    updatePowerModeDisplay(state.status.power_control_mode);
 
     // Calculate total hashrate
     updateTotalHashrate();
@@ -597,8 +566,8 @@ function updateMinersGrid() {
             const uptime = formatUptime(miner.uptime_seconds);
             const pool = extractPoolName(miner.pool_url);
 
-            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : miner.rated_power_kw.toFixed(2);
-            const efficiency = hashrate > 0 && miner.rated_power_kw > 0 ? (hashrate / (miner.rated_power_kw * 1000)).toFixed(2) : '--';
+            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : RATED_POWER_KW.toFixed(2);
+            const efficiency = hashrate > 0 && RATED_POWER_KW > 0 ? (hashrate / (RATED_POWER_KW * 1000)).toFixed(2) : '--';
 
             // Board status - when miner is idle/not mining, we can't know board status
             // so show all as unknown (null) rather than simulating incorrect data
@@ -607,7 +576,7 @@ function updateMinersGrid() {
             const boards = miner.is_mining ? [true, true, true] : miner.is_online ? [true, true, true] : [false, false, false];
 
             // Get firmware badge
-            const firmwareType = miner.firmware_type || 'unknown';
+            const firmwareType = deriveFirmwareType(miner.firmware);
             const firmwareBadgeText =
                 firmwareType === 'vnish' ? 'Vnish' : firmwareType === 'braiins' ? 'BraiinsOS' : firmwareType === 'stock' ? 'Stock' : firmwareType === 'marathon' ? 'Marathon' : '';
 
@@ -757,7 +726,7 @@ function updateMinersTable() {
 
             const temp = miner.temperature_c > 0 ? miner.temperature_c.toFixed(0) + '°C' : '--';
             const fan = miner.fan_speed_pct > 0 ? miner.fan_speed_pct.toFixed(0) + '%' : '--';
-            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) + ' kW' : miner.rated_power_kw.toFixed(2) + ' kW';
+            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) + ' kW' : RATED_POWER_KW.toFixed(2) + ' kW';
             const uptime = formatUptime(miner.uptime_seconds);
             const pool = extractPoolName(miner.pool_url);
 
@@ -830,7 +799,7 @@ function updateMinersRack() {
     state.discoveredMiners.forEach(miner => {
         totalHashrate += parseFloat(miner.hashrate_ghs) || 0;
         if (miner.is_mining) {
-            totalPower += miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+            totalPower += miner.power_kw > 0 ? miner.power_kw : RATED_POWER_KW;
         } else if (miner.is_online) {
             totalPower += RACK_IDLE_POWER_KW;
         }
@@ -855,15 +824,18 @@ function updateMinersRack() {
                 : hashrate.toFixed(0) + ' GH/s';
 
             const temp = miner.temperature_c > 0 ? miner.temperature_c.toFixed(0) + '°C' : '--';
-            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : miner.rated_power_kw.toFixed(2);
+            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : RATED_POWER_KW.toFixed(2);
             const fan = miner.fan_speed_pct > 0 ? miner.fan_speed_pct.toFixed(0) + '%' : '--';
             const efficiency = (hashrate > 0 && miner.power_kw > 0) 
                 ? (hashrate / miner.power_kw / 1000).toFixed(2) + ' TH/kW'
                 : '--';
-            const uptime = miner.uptime_hours > 0 
-                ? (miner.uptime_hours >= 24 
-                    ? Math.floor(miner.uptime_hours / 24) + 'd ' + (miner.uptime_hours % 24).toFixed(0) + 'h'
-                    : miner.uptime_hours.toFixed(1) + 'h')
+            const uptimeSeconds = miner.uptime_seconds || 0;
+            const uptime = uptimeSeconds > 0 
+                ? (uptimeSeconds >= 86400 
+                    ? Math.floor(uptimeSeconds / 86400) + 'd ' + Math.floor((uptimeSeconds % 86400) / 3600) + 'h'
+                    : uptimeSeconds >= 3600
+                        ? (uptimeSeconds / 3600).toFixed(1) + 'h'
+                        : Math.floor(uptimeSeconds / 60) + 'm')
                 : '--';
 
             return `
@@ -939,74 +911,67 @@ function updateHistoryDisplay() {
         .join('');
 }
 
-// ── Section Test Display ──
-function updateSectionTestDisplay() {
-    const card = $('section-test-card');
-    const grid = $('section-test-grid');
-    const badge = $('section-test-status');
-    const failedDiv = $('section-test-failed');
-    const failedList = $('section-test-failed-list');
-    if (!card || !grid) return;
+// ── Sections Display ──
+function updateSectionsDisplay() {
+    const grid = $('sections-grid');
+    if (!grid) return;
 
-    const st = sectionTestState;
-    if (!st.sections || st.sections.length === 0) {
-        card.classList.add('hidden');
+    if (sectionsState.length === 0) {
+        grid.innerHTML = '<div class="section-empty">No sections available</div>';
         return;
     }
 
-    card.classList.remove('hidden');
+    grid.innerHTML = sectionsState.map((sec) => {
+        const total = sec.total_miners || 0;
+        const mining = sec.mining_miners || 0;
+        const sleeping = sec.sleeping_miners || 0;
+        const online = sec.online_miners || 0;
+        const alive = sec.process_alive;
+        const activePower = (sec.active_power_kw || 0).toFixed(1);
+        const ratedPower = (sec.rated_power_kw || 0).toFixed(1);
+        const targetPower = sec.target_power_kw;
+        const pct = sec.rated_power_kw > 0 ? Math.round((sec.active_power_kw / sec.rated_power_kw) * 100) : 0;
 
-    // Status badge
-    if (st.running) {
-        badge.textContent = 'RUNNING';
-        badge.className = 'section-test-badge running';
-    } else {
-        badge.textContent = 'DONE';
-        badge.className = 'section-test-badge done';
-    }
-
-    // Render each section
-    grid.innerHTML = st.sections.map((sec) => {
-        const total = sec.miners ? sec.miners.length : 0;
-        const mining = sec.mining_count || 0;
-        const failed = sec.failed || [];
-        const pct = total > 0 ? Math.round((mining / total) * 100) : 0;
-
-        let statusClass = 'waiting';
-        let statusText = 'Waiting';
-        if (sec.status === 'testing') { statusClass = 'testing'; statusText = 'Testing'; }
-        else if (sec.status === 'done') {
-            if (failed.length === 0) { statusClass = 'passed'; statusText = `${pct}% ✓`; }
-            else { statusClass = 'failed'; statusText = `${pct}% (${failed.length} failed)`; }
-        }
-
-        const ipRange = total > 0 ? `${sec.miners[0]} — ${sec.miners[total - 1]}` : '';
+        let statusClass = alive ? (mining > 0 ? 'mining' : 'idle') : 'offline';
+        let statusText = alive ? (mining > 0 ? 'Mining' : 'Standby') : 'Dead';
 
         return `
-            <div class="section-item ${statusClass}">
-                <div class="section-item-header">
-                    <span class="section-item-title">Section ${sec.id}</span>
-                    <span class="section-item-status ${statusClass}">${statusText}</span>
+            <div class="section-card ${statusClass}">
+                <div class="section-card-header">
+                    <span class="section-card-title">${sec.section_id}</span>
+                    <span class="section-card-status ${statusClass}">
+                        <span class="status-dot"></span>
+                        ${statusText}
+                    </span>
                 </div>
-                <div class="section-item-progress">
-                    <span>${mining}/${total} mining</span>
-                    <span>${ipRange}</span>
+                <div class="section-card-stats">
+                    <div class="section-stat">
+                        <span class="section-stat-value">${online}/${total}</span>
+                        <span class="section-stat-label">Online</span>
+                    </div>
+                    <div class="section-stat">
+                        <span class="section-stat-value">${mining}</span>
+                        <span class="section-stat-label">Mining</span>
+                    </div>
+                    <div class="section-stat">
+                        <span class="section-stat-value">${sleeping}</span>
+                        <span class="section-stat-label">Sleeping</span>
+                    </div>
+                    <div class="section-stat">
+                        <span class="section-stat-value">${activePower}</span>
+                        <span class="section-stat-label">kW</span>
+                    </div>
                 </div>
-                <div class="section-item-bar">
-                    <div class="section-item-bar-fill" style="width: ${pct}%"></div>
+                <div class="section-card-bar">
+                    <div class="section-card-bar-fill" style="width: ${Math.min(pct, 100)}%"></div>
+                </div>
+                <div class="section-card-footer">
+                    ${targetPower != null ? `Target: ${targetPower.toFixed(1)} kW` : 'No target'}
+                    <span>Rated: ${ratedPower} kW</span>
                 </div>
             </div>
         `;
     }).join('');
-
-    // Collect all failed miners across all sections
-    const allFailed = st.sections.flatMap(s => s.failed || []);
-    if (allFailed.length > 0) {
-        failedDiv.classList.remove('hidden');
-        failedList.textContent = allFailed.join(', ');
-    } else {
-        failedDiv.classList.add('hidden');
-    }
 }
 
 // =========================================================================
@@ -1126,73 +1091,12 @@ async function handleSetPower() {
 
         if (data.accepted) {
             showToast(`Target power set to ${power} kW`, 'success');
-            // Hide allocation preview after applying
-            $('power-allocation-section')?.classList.add('hidden');
         } else {
             showToast(data.message || 'Failed to set power target', 'error');
         }
         await fetchStatus();
     } catch (error) {
         showToast('Error setting power target', 'error');
-    }
-}
-
-async function handlePreviewPower() {
-    const power = parseFloat($('power-input').value);
-    if (isNaN(power) || power < 0) {
-        showToast('Please enter a valid power value', 'error');
-        return;
-    }
-
-    const allocationSection = $('power-allocation-section');
-    const allocationList = $('allocation-list');
-
-    try {
-        const response = await fetch(`${CONFIG.apiBase}/power/calculate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_power_kw: power }),
-        });
-        const data = await response.json();
-
-        if (data.error) {
-            showToast(data.error, 'error');
-            return;
-        }
-
-        // Update summary counts
-        $('alloc-full-count').textContent = data.summary?.full_miners || 0;
-        $('alloc-swing-count').textContent = data.summary?.swing_miners || 0;
-        $('alloc-idle-count').textContent = data.summary?.idle_miners || 0;
-        $('alloc-estimated-power').textContent = data.summary?.estimated_power_kw?.toFixed(2) || '0.0';
-
-        // Render allocation items
-        if (allocationList) {
-            allocationList.innerHTML = (data.allocation || []).map(alloc => {
-                const actionClass = alloc.action;
-                const freqText = alloc.action === 'idle' ? 'Idle' : `${alloc.frequency}MHz`;
-                const powerText = alloc.action === 'idle' ? '0W' : `~${alloc.estimated_power}W`;
-                
-                return `
-                    <div class="allocation-item ${actionClass}">
-                        <span class="status-indicator"></span>
-                        <span class="miner-ip">${alloc.ip}</span>
-                        <div class="miner-details">
-                            <span class="miner-freq">${freqText}</span>
-                            <span class="miner-power">${powerText}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // Show the section
-        allocationSection?.classList.remove('hidden');
-        showToast(`Preview: ${data.summary?.full_miners || 0} full + ${data.summary?.swing_miners || 0} swing miners`, 'info');
-
-    } catch (error) {
-        console.error('Failed to preview power allocation:', error);
-        showToast('Error calculating power allocation', 'error');
     }
 }
 
@@ -1208,65 +1112,6 @@ function handlePowerInputChange(e) {
     const percent = state.ratedPower > 0 ? (power / state.ratedPower) * 100 : 0;
     $('power-slider').value = Math.min(percent, 100);
     $('slider-value').textContent = power.toFixed(1) + ' kW';
-}
-
-async function handleOverrideToggle(e) {
-    const enabled = e.target.checked;
-
-    try {
-        const response = await fetch(`${CONFIG.apiBase}/override`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                enabled: enabled,
-                target_power_kw: enabled ? parseFloat($('power-input').value) || 0 : null,
-            }),
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            showToast(enabled ? 'Manual override enabled' : 'Manual override disabled', enabled ? 'warning' : 'success');
-        } else {
-            showToast(data.message || 'Failed to toggle override', 'error');
-            e.target.checked = !enabled;
-        }
-        await fetchStatus();
-    } catch (error) {
-        showToast('Error toggling override', 'error');
-        e.target.checked = !enabled;
-    }
-}
-
-// Power Mode Select Functions
-function updatePowerModeDisplay(mode) {
-    const select = $('power-mode-select');
-    if (select) {
-        select.value = mode;
-    }
-}
-
-async function handlePowerModeChange(e) {
-    const mode = e.target.value;
-    const previousValue = mode === 'frequency' ? 'on_off' : 'frequency';
-    
-    try {
-        const response = await fetch(`${CONFIG.apiBase}/power-mode`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: mode }),
-        });
-        const data = await response.json();
-        
-        if (data.success) {
-            showToast(`Power mode: ${mode === 'frequency' ? 'Frequency' : 'On/Off'}`, 'success');
-        } else {
-            showToast(data.message || 'Failed to change power mode', 'error');
-            e.target.value = previousValue; // Revert
-        }
-    } catch (error) {
-        showToast('Error changing power mode', 'error');
-        e.target.value = previousValue; // Revert
-    }
 }
 
 async function handleScan() {
@@ -1507,6 +1352,16 @@ function getTempClass(temp) {
     return 'temp-ok';
 }
 
+function deriveFirmwareType(firmware) {
+    if (!firmware) return 'unknown';
+    const fw = firmware.toLowerCase();
+    if (fw.includes('vnish')) return 'vnish';
+    if (fw.includes('braiins') || fw.includes('bos')) return 'braiins';
+    if (fw.includes('marathon')) return 'marathon';
+    if (fw.includes('antminer') || fw.includes('bitmain')) return 'stock';
+    return 'unknown';
+}
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -1650,64 +1505,6 @@ async function toggleFindMiner(minerIp) {
 // Legacy blink function (for backwards compatibility)
 async function blinkMiner(minerIp) {
     return toggleFindMiner(minerIp);
-}
-
-// =========================================================================
-// Pool Configuration Handlers
-// =========================================================================
-
-async function handleUpdatePoolAll() {
-    const poolUrl = $('pool-url').value.trim();
-    const worker = $('pool-worker').value.trim();
-    const password = $('pool-password').value.trim() || 'x';
-
-    if (!poolUrl) {
-        showToast('Please enter a pool URL', 'error');
-        return;
-    }
-    if (!worker) {
-        showToast('Please enter a worker name', 'error');
-        return;
-    }
-
-    const confirmed = await showConfirm({
-        title: 'Update All Pools',
-        message: `Update pool settings on ALL ${state.discoveredMiners.length} miners?`,
-        type: 'info',
-        confirmText: 'Update All',
-    });
-    if (!confirmed) return;
-
-    showToast('Updating pool on all miners...', 'info');
-
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const miner of state.discoveredMiners) {
-        try {
-            const response = await fetch(`${CONFIG.apiBase}/pool/update`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    miner_ip: miner.ip,
-                    pool_url: poolUrl,
-                    worker: worker,
-                    password: password,
-                }),
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                successCount++;
-            } else {
-                failCount++;
-            }
-        } catch (error) {
-            failCount++;
-        }
-    }
-
-    showToast(`Pool updated: ${successCount} success, ${failCount} failed`, successCount > 0 ? 'success' : 'error');
 }
 
 // =========================================================================
@@ -1858,7 +1655,7 @@ function runFleetAnomalyDetection() {
             onlineCount++;
             const temp = miner.temperature_c || miner.temp_chip || 0;
             const hashrate = parseFloat(miner.hashrate_ghs) || parseFloat(miner.hashrate) || 0;
-            const power = miner.power_kw > 0 ? miner.power_kw : miner.power_w ? miner.power_w / 1000 : miner.rated_power_kw || 0;
+            const power = miner.power_kw > 0 ? miner.power_kw : miner.power_w ? miner.power_w / 1000 : RATED_POWER_KW;
 
             if (temp > 0) temperatures.push({ ip: miner.ip, temp });
             if (hashrate > 0) hashrates.push({ ip: miner.ip, hashrate });
@@ -2730,7 +2527,8 @@ async function openMinerModal(minerIp) {
     }
 
     // Auto-load chip hashrate data for Vnish firmware
-    if (miner.firmware_type === 'vnish' || !miner.firmware_type) {
+    const fw = deriveFirmwareType(miner.firmware);
+    if (fw === 'vnish' || !miner.firmware) {
         loadChipHashrateAuto(miner.ip);
     }
 }
@@ -2889,7 +2687,7 @@ function updateModalOverviewLive(miner) {
     const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
     const hashrate = parseFloat(miner.hashrate_ghs) || 0;
     const hashrateDisplay = hashrate >= 1000 ? (hashrate / 1000).toFixed(2) + ' TH/s' : hashrate.toFixed(0) + ' GH/s';
-    const power = miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+    const power = miner.power_kw > 0 ? miner.power_kw : RATED_POWER_KW;
     const powerWatts = power * 1000;
     const efficiency = hashrate > 0 && power > 0 ? ((power * 1000) / (hashrate / 1000)).toFixed(1) : '--';
 
@@ -2920,7 +2718,7 @@ function updateModalOverview(miner) {
     const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
     const hashrate = parseFloat(miner.hashrate_ghs) || 0;
     const hashrateDisplay = hashrate >= 1000 ? (hashrate / 1000).toFixed(2) + ' TH/s' : hashrate.toFixed(0) + ' GH/s';
-    const power = miner.power_kw > 0 ? miner.power_kw : miner.rated_power_kw;
+    const power = miner.power_kw > 0 ? miner.power_kw : RATED_POWER_KW;
     const powerWatts = power * 1000;
     const efficiency = hashrate > 0 && power > 0 ? ((power * 1000) / (hashrate / 1000)).toFixed(1) : '--';
 
@@ -2965,7 +2763,7 @@ function updateModalFirmwareBadge(miner) {
     const badge = $('modal-firmware-badge');
     if (!badge) return;
 
-    const firmwareType = miner.firmware_type || 'unknown';
+    const firmwareType = deriveFirmwareType(miner.firmware);
     const badgeText =
         firmwareType === 'vnish' ? 'Vnish' : firmwareType === 'braiins' ? 'BraiinsOS' : firmwareType === 'stock' ? 'Stock' : firmwareType === 'marathon' ? 'Marathon' : 'Unknown';
 
@@ -4108,9 +3906,6 @@ function disableAutoScan() {
 // =========================================================================
 
 function setupNewEventListeners() {
-    // Pool configuration
-    $('btn-update-pool-all')?.addEventListener('click', handleUpdatePoolAll);
-
     // Anomaly detection
     $('btn-clear-anomalies')?.addEventListener('click', clearAnomalies);
 

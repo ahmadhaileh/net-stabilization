@@ -35,13 +35,6 @@
     </div>
     <div class="header-right">
       <div class="header-stat">
-        <span class="stat-label">Power Mode</span>
-        <select id="power-mode-select" class="header-select">
-          <option value="on_off">On/Off</option>
-          <option value="frequency">Frequency</option>
-        </select>
-      </div>
-      <div class="header-stat">
         <span class="stat-label">Total Hashrate</span>
         <span class="stat-value" id="total-hashrate">0 GH/s</span>
       </div>
@@ -53,7 +46,6 @@
         <span id="status-dot" class="status-dot"></span>
         <span id="connection-status">Connecting...</span>
       </div>
-      <div id="dev-mode-badge" class="dev-mode-badge hidden">DEV MODE</div>
       <div class="header-stat last-update-stat">
         <span class="stat-label">Updated</span>
         <span class="stat-value" id="last-updated">--</span>
@@ -261,6 +253,25 @@
       </div>
     </section>
 
+    <!-- Sections Overview — shows each independent section process -->
+    <section class="sections-overview">
+      <div class="section-header">
+        <h2>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          Section Processes
+        </h2>
+        <span class="architecture-badge">Process-Isolated</span>
+      </div>
+      <div id="sections-grid" class="sections-grid">
+        <!-- Populated by JS -->
+        <div class="section-loading">Loading section data...</div>
+      </div>
+    </section>
+
     <!-- Historical Graphs Section - Now above Fleet Control -->
     <section class="graphs-section">
       <div class="section-header">
@@ -366,64 +377,33 @@
             <line x1="8" y1="21" x2="16" y2="21" />
             <line x1="12" y1="17" x2="12" y2="21" />
           </svg> Fleet Control</h2>
-        <div id="override-badge" class="override-badge hidden">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span>Manual Override Active</span>
-        </div>
       </div>
 
       <div class="control-sections fleet-control-rows">
         <!-- Row 1: Quick Actions -->
         <div class="control-row actions-row">
-          <button id="btn-idle-all" class="btn btn-warning" title="Stop mining on all units but keep them online and ready">
+          <button id="btn-idle-all" class="btn btn-warning" title="Sleep all miners — stop mining, stay online">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="6" y="4" width="4" height="16" />
               <rect x="14" y="4" width="4" height="16" />
             </svg>
-            Idle All
+            Sleep All
           </button>
-          <button id="btn-resume-all" class="btn btn-success" title="Resume mining on all idle miners at full rated power">
+          <button id="btn-resume-all" class="btn btn-success" title="Wake all miners at full rated power">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
-            Resume All
+            Wake All
           </button>
-          <button id="btn-emergency" class="btn btn-danger" title="Immediately stop all mining operations - use in emergency only">
+          <button id="btn-emergency" class="btn btn-danger" title="Immediately stop all mining operations">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
             </svg>
             Emergency Stop
           </button>
-          <div class="override-toggle-inline">
-            <label class="toggle-switch small">
-              <input type="checkbox" id="override-toggle">
-              <span class="toggle-slider"></span>
-            </label>
-            <span class="override-label info-tooltip">
-              Manual Override
-              <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-              </svg>
-              <span class="info-text">Ignores EMS commands and uses dashboard power target. Enable for manual control or testing.</span>
-            </span>
-          </div>
         </div>
 
-        <!-- Row 2: Pool Configuration -->
-        <div class="control-row pool-row">
-          <input type="text" id="pool-url" class="text-input" placeholder="stratum+tcp://pool.example.com:3333" title="Mining pool URL (stratum protocol)">
-          <input type="text" id="pool-worker" class="text-input" placeholder="wallet.worker1" title="Worker name (usually wallet.worker)">
-          <input type="text" id="pool-password" class="text-input" placeholder="x" value="x" title="Pool password (usually 'x')">
-          <button id="btn-update-pool-all" class="btn btn-primary">Update All</button>
-        </div>
-
-        <!-- Row 3: Power Target -->
+        <!-- Row 2: Power Target -->
         <div class="control-row power-row">
           <div class="power-slider-mini">
             <input type="range" id="power-slider" class="power-slider" min="0" max="100" value="0" title="Drag to set target power">
@@ -438,46 +418,8 @@
             <span class="input-unit">kW</span>
           </div>
           <button id="btn-set-power" class="btn btn-primary">Set Power</button>
-          <button id="btn-preview-power" class="btn btn-secondary" title="Preview how power will be allocated across miners">
-            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            Preview
-          </button>
         </div>
 
-        <!-- Row 4: Power Allocation Preview (hidden by default) -->
-        <div id="power-allocation-section" class="control-row power-allocation-row hidden">
-          <div class="allocation-header">
-            <h4>
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-              </svg>
-              Power Allocation Preview
-            </h4>
-            <div class="allocation-summary">
-              <span class="summary-item full">
-                <span class="dot full"></span>
-                <span id="alloc-full-count">0</span> Full Power
-              </span>
-              <span class="summary-item swing">
-                <span class="dot swing"></span>
-                <span id="alloc-swing-count">0</span> Swing
-              </span>
-              <span class="summary-item idle">
-                <span class="dot idle"></span>
-                <span id="alloc-idle-count">0</span> Idle
-              </span>
-              <span class="summary-total">
-                Est: <strong id="alloc-estimated-power">0.0</strong> kW
-              </span>
-            </div>
-          </div>
-          <div id="allocation-list" class="allocation-list">
-            <!-- Allocation items will be rendered here -->
-          </div>
-        </div>
       </div>
     </section>
 
@@ -1193,7 +1135,7 @@
     </div>
   </div>
 
-  <script src="/static/js/dashboard.js?v=7"></script>
+  <script src="/static/js/dashboard.js?v=9"></script>
 </body>
 
 </html>
