@@ -31,6 +31,7 @@ class FleetStatusResponse(BaseModel):
     rated_power_kw: float
     active_power_kw: float
     measured_power_kw: Optional[float] = None
+    plant_power_kw: Optional[float] = None
     voltage: Optional[float] = None
     power_source: str = "estimate"
     target_power_kw: Optional[float] = None
@@ -62,6 +63,7 @@ async def get_fleet_status():
         rated_power_kw=s["rated_power_kw"],
         active_power_kw=s["active_power_kw"],
         measured_power_kw=s.get("measured_power_kw"),
+        plant_power_kw=s.get("plant_power_kw"),
         voltage=s.get("voltage"),
         power_source="meter" if s.get("measured_power_kw") is not None else "estimate",
         target_power_kw=s.get("target_power_kw"),
@@ -127,6 +129,30 @@ async def get_sections():
         sections.append(status)
 
     return {"sections": sections}
+
+
+@router.post("/sections/{section_id}/sleep")
+async def section_sleep_all(section_id: str):
+    """Deactivate (sleep) all miners in a specific section."""
+    maestro = get_maestro()
+    section = next((s for s in maestro.sections if s.section_id == section_id), None)
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Section {section_id} not found")
+    section.deactivate()
+    logger.info("section_sleep_all", section=section_id)
+    return {"success": True, "message": f"Sleep command sent to {section_id}"}
+
+
+@router.post("/sections/{section_id}/wake")
+async def section_wake_all(section_id: str):
+    """Wake (set target to rated power) all miners in a specific section."""
+    maestro = get_maestro()
+    section = next((s for s in maestro.sections if s.section_id == section_id), None)
+    if not section:
+        raise HTTPException(status_code=404, detail=f"Section {section_id} not found")
+    section.set_target(section.rated_power_kw)
+    logger.info("section_wake_all", section=section_id, target_kw=section.rated_power_kw)
+    return {"success": True, "message": f"Wake command sent to {section_id} (target: {section.rated_power_kw:.1f} kW)"}
 
 
 # ── Miner Control ────────────────────────────────────────────────

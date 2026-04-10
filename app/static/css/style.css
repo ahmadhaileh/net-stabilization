@@ -2775,11 +2775,53 @@ svg.stat-icon {
 }
 
 .rack-units {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-height: 100px;
+    align-content: start;
+}
+
+.rack-section-group {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.rack-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.rack-section-header:hover {
+    background: var(--bg-surface);
+}
+
+.rack-section-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+
+.rack-section-info {
+    font-size: 0.65rem;
+    color: var(--text-tertiary);
+}
+
+.rack-section-slots {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
     gap: 4px;
-    min-height: 100px;
-    align-content: start;
+    padding: var(--space-3);
 }
 
 .rack-slot {
@@ -3002,6 +3044,10 @@ svg.stat-icon {
     }
 
     .rack-units {
+        gap: var(--space-3);
+    }
+
+    .rack-section-slots {
         grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
         gap: 3px;
     }
@@ -6565,24 +6611,29 @@ body {
    Sections Overview (Process-Isolated Architecture)
    ========================================================================= */
 .sections-overview {
-    background: var(--card-bg, #1e1e2e);
-    border: 1px solid var(--border-color, #333);
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 20px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    margin-bottom: var(--space-5);
+    overflow: visible;
 }
 
 .sections-overview .section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 16px;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
 }
 
-.sections-overview .section-header h3 {
-    margin: 0;
-    font-size: 16px;
+.sections-overview .section-header h2 {
+    font-size: 0.85rem;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 .architecture-badge {
@@ -6599,26 +6650,31 @@ body {
 .sections-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
 }
 
-.section-empty {
-    color: var(--text-secondary, #888);
+.section-empty,
+.section-loading {
+    color: var(--text-tertiary);
     grid-column: 1 / -1;
     text-align: center;
-    padding: 16px;
+    padding: var(--space-5);
+    font-size: 0.8rem;
 }
 
 .section-card {
-    background: var(--bg-tertiary, #252538);
-    border-radius: 8px;
-    padding: 14px;
-    border-left: 4px solid var(--border-color, #444);
-    transition: border-color 0.3s, box-shadow 0.3s;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    border-left: 4px solid var(--border-subtle);
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.15s;
+    cursor: pointer;
 }
 
 .section-card:hover {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+    transform: translateY(-1px);
 }
 
 .section-card.mining {
@@ -6637,21 +6693,22 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
+    margin-bottom: var(--space-3);
 }
 
 .section-card-title {
     font-weight: 600;
-    font-size: 13px;
+    font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    color: var(--text-primary);
 }
 
 .section-card-status {
     display: flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: 0.65rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -6692,8 +6749,8 @@ body {
 .section-card-stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
-    margin-bottom: 10px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
 }
 
 .section-stat {
@@ -6702,26 +6759,26 @@ body {
 
 .section-stat-value {
     display: block;
-    font-size: 15px;
+    font-size: 0.85rem;
     font-weight: 700;
-    color: var(--text-primary, #e6edf3);
+    color: var(--text-primary);
     line-height: 1.2;
 }
 
 .section-stat-label {
     display: block;
-    font-size: 10px;
-    color: var(--text-secondary, #888);
+    font-size: 0.6rem;
+    color: var(--text-tertiary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .section-card-bar {
     height: 4px;
-    background: var(--border-color, #333);
+    background: var(--border-subtle);
     border-radius: 2px;
     overflow: hidden;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
 }
 
 .section-card-bar-fill {
@@ -6734,6 +6791,192 @@ body {
 .section-card-footer {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
-    color: var(--text-secondary, #888);
+    font-size: 0.65rem;
+    color: var(--text-tertiary);
+}
+
+/* ── Section Detail Modal ─────────────────────────────────────── */
+
+#section-modal {
+    z-index: 1000;
+}
+
+.section-modal {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    width: 90%;
+    max-width: 800px;
+    max-height: 85vh;
+    overflow-y: auto;
+    transform: translateY(20px);
+    transition: transform var(--transition-base);
+}
+
+#section-modal.active .section-modal {
+    transform: translateY(0);
+}
+
+.section-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+.section-modal-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-modal-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    margin-top: var(--space-1);
+}
+
+.section-modal-badge.mining {
+    background: rgba(0, 200, 83, 0.15);
+    color: #00c853;
+}
+
+.section-modal-badge.idle {
+    background: rgba(255, 193, 7, 0.15);
+    color: #ffc107;
+}
+
+.section-modal-badge.offline {
+    background: rgba(255, 82, 82, 0.15);
+    color: #ff5252;
+}
+
+.section-modal-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.section-modal-stat {
+    text-align: center;
+}
+
+.section-modal-stat-value {
+    display: block;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.section-modal-stat-label {
+    display: block;
+    font-size: 0.6rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}
+
+.section-modal-controls {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.section-modal-controls .btn {
+    font-size: 0.75rem;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: var(--transition-fast);
+}
+
+.section-modal-controls .btn-sleep {
+    background: var(--accent-cyan);
+    color: #fff;
+}
+
+.section-modal-controls .btn-sleep:hover {
+    opacity: 0.85;
+}
+
+.section-modal-controls .btn-wake {
+    background: var(--status-mining);
+    color: #fff;
+}
+
+.section-modal-controls .btn-wake:hover {
+    opacity: 0.85;
+}
+
+.section-modal-rack {
+    padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.section-modal-rack h3 {
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 0 0 var(--space-3) 0;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.section-rack-units {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 18px);
+    gap: 4px;
+    margin-bottom: var(--space-3);
+}
+
+.section-rack-slot {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: transform 0.1s;
+    position: relative;
+}
+
+.section-rack-slot:hover {
+    transform: scale(1.4);
+    z-index: 2;
+}
+
+.section-rack-slot.mining {
+    background: var(--status-mining);
+    box-shadow: 0 0 4px rgba(0, 200, 83, 0.3);
+}
+
+.section-rack-slot.idle {
+    background: var(--status-idle);
+}
+
+.section-rack-slot.offline {
+    background: var(--status-offline);
+    opacity: 0.6;
+}
+
+.section-rack-legend {
+    display: flex;
+    gap: var(--space-4);
+    font-size: 0.7rem;
+    color: var(--text-tertiary);
 }

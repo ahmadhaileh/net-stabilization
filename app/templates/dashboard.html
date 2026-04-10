@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Grid Stabilization - Mining Fleet Control</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/style.css?v=10">
+  <link rel="stylesheet" href="/static/css/style.css?v=11">
   <!-- Chart.js Date Adapter -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -711,6 +711,36 @@
     </div>
   </div>
 
+  <!-- Section Detail Modal -->
+  <div id="section-modal" class="modal-overlay" onclick="if(event.target===this)closeSectionModal()">
+    <div class="section-modal">
+      <div class="section-modal-header">
+        <div>
+          <h2 id="section-modal-title">Section</h2>
+          <span id="section-modal-status" class="section-modal-badge">--</span>
+        </div>
+        <button class="modal-close" onclick="closeSectionModal()">&times;</button>
+      </div>
+      <div class="section-modal-stats" id="section-modal-stats">
+        <!-- Populated by JS -->
+      </div>
+      <div class="section-modal-controls" id="section-modal-controls">
+        <!-- Control buttons populated by JS -->
+      </div>
+      <div class="section-modal-rack">
+        <h3>Miner Map</h3>
+        <div class="section-rack-units" id="section-rack-units">
+          <!-- Miner slots for this section -->
+        </div>
+        <div class="section-rack-legend">
+          <span class="legend-item"><span class="legend-dot mining"></span> Mining</span>
+          <span class="legend-item"><span class="legend-dot idle"></span> Idle</span>
+          <span class="legend-item"><span class="legend-dot offline"></span> Offline</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Miner Detail Modal -->
   <div id="miner-modal" class="modal-overlay">
     <div class="miner-modal">
@@ -1135,7 +1165,7 @@
     </div>
   </div>
 
-  <script src="/static/js/dashboard.js?v=9"></script>
+  <script src="/static/js/dashboard.js?v=10"></script>
 </body>
 
 </html>

@@ -325,9 +325,15 @@ function updateStatusDisplay() {
         }
     }
     if (meterPlant) {
-        meterPlant.textContent = '-- kW';
-        meterPlant.classList.add('meter-offline');
-        meterPlant.classList.remove('meter-live');
+        if (state.status.plant_power_kw !== null && state.status.plant_power_kw !== undefined) {
+            meterPlant.textContent = state.status.plant_power_kw.toFixed(2) + ' kW';
+            meterPlant.classList.add('meter-live');
+            meterPlant.classList.remove('meter-offline');
+        } else {
+            meterPlant.textContent = '-- kW';
+            meterPlant.classList.add('meter-offline');
+            meterPlant.classList.remove('meter-live');
+        }
     }
     // Voltage display with power-loss warning
     const meterVoltage = $('meter-voltage');
@@ -804,82 +810,112 @@ function updateMinersRack() {
         }
     });
 
-    // Update stats (separate value from label now)
+    // Update stats
     rackTotalMiners.textContent = state.discoveredMiners.length;
     rackTotalHashrate.textContent = totalHashrate >= 1000 
         ? (totalHashrate / 1000).toFixed(1) + ' TH/s' 
         : totalHashrate.toFixed(0) + ' GH/s';
     rackTotalPower.textContent = totalPower.toFixed(1) + ' kW';
 
-    // Render rack slots
-    rackUnits.innerHTML = state.discoveredMiners
-        .map((miner) => {
-            const statusClass = miner.is_mining ? 'mining' : miner.is_online ? 'idle' : 'offline';
-            const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
+    // Group miners by section
+    const groups = {};
+    state.discoveredMiners.forEach(miner => {
+        const sec = miner.section || 'unassigned';
+        if (!groups[sec]) groups[sec] = [];
+        groups[sec].push(miner);
+    });
 
-            const hashrate = parseFloat(miner.hashrate_ghs) || 0;
-            const hashrateDisplay = hashrate >= 1000 
-                ? (hashrate / 1000).toFixed(2) + ' TH/s' 
-                : hashrate.toFixed(0) + ' GH/s';
+    // Sort section keys naturally (section-1, section-2, ...)
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+        const na = parseInt(a.replace(/\D/g, '')) || 0;
+        const nb = parseInt(b.replace(/\D/g, '')) || 0;
+        return na - nb;
+    });
 
-            const temp = miner.temperature_c > 0 ? miner.temperature_c.toFixed(0) + '°C' : '--';
-            const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : RATED_POWER_KW.toFixed(2);
-            const fan = miner.fan_speed_pct > 0 ? miner.fan_speed_pct.toFixed(0) + '%' : '--';
-            const efficiency = (hashrate > 0 && miner.power_kw > 0) 
-                ? (hashrate / miner.power_kw / 1000).toFixed(2) + ' TH/kW'
-                : '--';
-            const uptimeSeconds = miner.uptime_seconds || 0;
-            const uptime = uptimeSeconds > 0 
-                ? (uptimeSeconds >= 86400 
-                    ? Math.floor(uptimeSeconds / 86400) + 'd ' + Math.floor((uptimeSeconds % 86400) / 3600) + 'h'
-                    : uptimeSeconds >= 3600
-                        ? (uptimeSeconds / 3600).toFixed(1) + 'h'
-                        : Math.floor(uptimeSeconds / 60) + 'm')
-                : '--';
+    // Render grouped rack
+    rackUnits.innerHTML = sortedKeys.map(secId => {
+        const miners = groups[secId];
+        const secMining = miners.filter(m => m.is_mining).length;
+        const secOnline = miners.filter(m => m.is_online).length;
+        const slotsHtml = miners.map(miner => renderRackSlot(miner)).join('');
 
-            return `
-                <div class="rack-slot ${statusClass}" onclick="openMinerModal('${miner.ip}')" data-ip="${miner.ip}">
-                    <span class="slot-indicator"></span>
-                    <div class="rack-tooltip">
-                        <div class="tooltip-header">
-                            <span class="tooltip-ip">${miner.ip}</span>
-                            <span class="tooltip-status ${statusClass}">${statusText}</span>
-                        </div>
-                        <div class="tooltip-stats">
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Hashrate</span>
-                                <span class="tooltip-stat-value">${hashrateDisplay}</span>
-                            </div>
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Temp</span>
-                                <span class="tooltip-stat-value">${temp}</span>
-                            </div>
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Power</span>
-                                <span class="tooltip-stat-value">${power} kW</span>
-                            </div>
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Fan</span>
-                                <span class="tooltip-stat-value">${fan}</span>
-                            </div>
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Efficiency</span>
-                                <span class="tooltip-stat-value">${efficiency}</span>
-                            </div>
-                            <div class="tooltip-stat">
-                                <span class="tooltip-stat-label">Uptime</span>
-                                <span class="tooltip-stat-value">${uptime}</span>
-                            </div>
-                            <div class="tooltip-stat" style="grid-column: 1 / -1;">
-                                <span class="tooltip-stat-label">Model</span>
-                                <span class="tooltip-stat-value">${escapeHtml(miner.model)}</span>
-                            </div>
-                        </div>
+        return `
+            <div class="rack-section-group">
+                <div class="rack-section-header" onclick="openSectionDetail('${escapeHtml(secId)}')">
+                    <span class="rack-section-label">${escapeHtml(secId)}</span>
+                    <span class="rack-section-info">${secOnline}/${miners.length} online · ${secMining} mining</span>
+                </div>
+                <div class="rack-section-slots">${slotsHtml}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderRackSlot(miner) {
+    const statusClass = miner.is_mining ? 'mining' : miner.is_online ? 'idle' : 'offline';
+    const statusText = miner.is_mining ? 'Mining' : miner.is_online ? 'Idle' : 'Offline';
+
+    const hashrate = parseFloat(miner.hashrate_ghs) || 0;
+    const hashrateDisplay = hashrate >= 1000 
+        ? (hashrate / 1000).toFixed(2) + ' TH/s' 
+        : hashrate.toFixed(0) + ' GH/s';
+
+    const temp = miner.temperature_c > 0 ? miner.temperature_c.toFixed(0) + '°C' : '--';
+    const power = miner.power_kw > 0 ? miner.power_kw.toFixed(2) : RATED_POWER_KW.toFixed(2);
+    const fan = miner.fan_speed_pct > 0 ? miner.fan_speed_pct.toFixed(0) + '%' : '--';
+    const efficiency = (hashrate > 0 && miner.power_kw > 0) 
+        ? (hashrate / miner.power_kw / 1000).toFixed(2) + ' TH/kW'
+        : '--';
+    const uptimeSeconds = miner.uptime_seconds || 0;
+    const uptime = uptimeSeconds > 0 
+        ? (uptimeSeconds >= 86400 
+            ? Math.floor(uptimeSeconds / 86400) + 'd ' + Math.floor((uptimeSeconds % 86400) / 3600) + 'h'
+            : uptimeSeconds >= 3600
+                ? (uptimeSeconds / 3600).toFixed(1) + 'h'
+                : Math.floor(uptimeSeconds / 60) + 'm')
+        : '--';
+
+    return `
+        <div class="rack-slot ${statusClass}" onclick="openMinerModal('${miner.ip}')" data-ip="${miner.ip}">
+            <span class="slot-indicator"></span>
+            <div class="rack-tooltip">
+                <div class="tooltip-header">
+                    <span class="tooltip-ip">${miner.ip}</span>
+                    <span class="tooltip-status ${statusClass}">${statusText}</span>
+                </div>
+                <div class="tooltip-stats">
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Hashrate</span>
+                        <span class="tooltip-stat-value">${hashrateDisplay}</span>
+                    </div>
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Temp</span>
+                        <span class="tooltip-stat-value">${temp}</span>
+                    </div>
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Power</span>
+                        <span class="tooltip-stat-value">${power} kW</span>
+                    </div>
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Fan</span>
+                        <span class="tooltip-stat-value">${fan}</span>
+                    </div>
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Efficiency</span>
+                        <span class="tooltip-stat-value">${efficiency}</span>
+                    </div>
+                    <div class="tooltip-stat">
+                        <span class="tooltip-stat-label">Uptime</span>
+                        <span class="tooltip-stat-value">${uptime}</span>
+                    </div>
+                    <div class="tooltip-stat" style="grid-column: 1 / -1;">
+                        <span class="tooltip-stat-label">Model</span>
+                        <span class="tooltip-stat-value">${escapeHtml(miner.model)}</span>
                     </div>
                 </div>
-            `;
-        })
-        .join('');
+            </div>
+        </div>
+    `;
 }
 
 function updateHistoryDisplay() {
@@ -935,7 +971,7 @@ function updateSectionsDisplay() {
         let statusText = alive ? (mining > 0 ? 'Mining' : 'Standby') : 'Dead';
 
         return `
-            <div class="section-card ${statusClass}">
+            <div class="section-card ${statusClass}" onclick="openSectionDetail('${sec.section_id}')">
                 <div class="section-card-header">
                     <span class="section-card-title">${sec.section_id}</span>
                     <span class="section-card-status ${statusClass}">
@@ -971,6 +1007,123 @@ function updateSectionsDisplay() {
             </div>
         `;
     }).join('');
+}
+
+// ── Section Detail Modal ──
+let currentSectionId = null;
+
+function openSectionDetail(sectionId) {
+    const sec = sectionsState.find(s => s.section_id === sectionId);
+    if (!sec) return;
+    currentSectionId = sectionId;
+
+    const total = sec.total_miners || 0;
+    const mining = sec.mining_miners || 0;
+    const sleeping = sec.sleeping_miners || 0;
+    const online = sec.online_miners || 0;
+    const alive = sec.process_alive;
+    const activePower = (sec.active_power_kw || 0).toFixed(1);
+    const ratedPower = (sec.rated_power_kw || 0).toFixed(1);
+    const targetPower = sec.target_power_kw;
+
+    let statusClass = alive ? (mining > 0 ? 'mining' : 'idle') : 'offline';
+    let statusText = alive ? (mining > 0 ? 'Mining' : 'Standby') : 'Process Dead';
+
+    // Header
+    $('section-modal-title').textContent = sectionId;
+    const badge = $('section-modal-status');
+    badge.textContent = statusText;
+    badge.className = 'section-modal-badge ' + statusClass;
+
+    // Stats
+    $('section-modal-stats').innerHTML = `
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${online}/${total}</span>
+            <span class="section-modal-stat-label">Online</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${mining}</span>
+            <span class="section-modal-stat-label">Mining</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${sleeping}</span>
+            <span class="section-modal-stat-label">Sleeping</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${activePower} kW</span>
+            <span class="section-modal-stat-label">Active Power</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${ratedPower} kW</span>
+            <span class="section-modal-stat-label">Rated Power</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${targetPower != null ? targetPower.toFixed(1) + ' kW' : '--'}</span>
+            <span class="section-modal-stat-label">Target</span>
+        </div>
+        <div class="section-modal-stat">
+            <span class="section-modal-stat-value">${alive ? '✓' : '✗'}</span>
+            <span class="section-modal-stat-label">Process</span>
+        </div>
+    `;
+
+    // Controls
+    $('section-modal-controls').innerHTML = `
+        <button class="btn btn-sleep" onclick="sectionSleepAll('${sectionId}')">Sleep All</button>
+        <button class="btn btn-wake" onclick="sectionWakeAll('${sectionId}')">Wake All</button>
+    `;
+
+    // Miner map
+    const miners = sec.miners || [];
+    const rackUnits = $('section-rack-units');
+    if (miners.length === 0) {
+        rackUnits.innerHTML = '<span style="color:var(--text-tertiary);font-size:0.75rem;">No miner data available</span>';
+    } else {
+        rackUnits.innerHTML = miners.map(m => {
+            const cls = m.is_mining ? 'mining' : m.is_online ? 'idle' : 'offline';
+            const label = m.is_mining ? 'Mining' : m.is_online ? 'Idle' : 'Offline';
+            const hr = parseFloat(m.hashrate_ghs) || 0;
+            const hrDisp = hr >= 1000 ? (hr/1000).toFixed(1) + ' TH/s' : hr.toFixed(0) + ' GH/s';
+            return `<div class="section-rack-slot ${cls}"
+                        title="${m.ip} — ${label}\nHashrate: ${hrDisp}\nPower: ${(m.power_kw||0).toFixed(2)} kW\nTemp: ${m.temperature_c > 0 ? m.temperature_c.toFixed(0)+'°C' : '--'}"
+                        onclick="event.stopPropagation(); openMinerModal('${m.ip}')"></div>`;
+        }).join('');
+    }
+
+    $('section-modal').classList.add('active');
+}
+
+function closeSectionModal() {
+    $('section-modal').classList.remove('active');
+    currentSectionId = null;
+}
+
+async function sectionSleepAll(sectionId) {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/sections/${sectionId}/sleep`, { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(`${sectionId}: sleep all sent`, 'success');
+        } else {
+            showToast(`${sectionId}: ${data.detail || 'failed'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`${sectionId}: request failed`, 'error');
+    }
+}
+
+async function sectionWakeAll(sectionId) {
+    try {
+        const response = await fetch(`${CONFIG.apiBase}/sections/${sectionId}/wake`, { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(`${sectionId}: wake all sent`, 'success');
+        } else {
+            showToast(`${sectionId}: ${data.detail || 'failed'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`${sectionId}: request failed`, 'error');
+    }
 }
 
 // =========================================================================
@@ -1026,6 +1179,10 @@ async function handleResumeAll() {
 
         if (data.accepted) {
             showToast('Resume command sent to fleet', 'success');
+            // Immediately start regulation timer
+            timerState.activationTime = new Date();
+            timerState.targetReachedTime = null;
+            timerState.stable = false;
         } else {
             showToast(data.message || 'Failed to resume fleet', 'error');
         }
@@ -1090,6 +1247,10 @@ async function handleSetPower() {
 
         if (data.accepted) {
             showToast(`Target power set to ${power} kW`, 'success');
+            // Immediately start regulation timer (don't wait for next poll)
+            timerState.activationTime = new Date();
+            timerState.targetReachedTime = null;
+            timerState.stable = false;
         } else {
             showToast(data.message || 'Failed to set power target', 'error');
         }
@@ -1481,6 +1642,10 @@ window.blinkMiner = blinkMiner;
 window.toggleFindMiner = toggleFindMiner;
 window.toggleDropdown = toggleDropdown;
 window.confirmReset = confirmReset;
+window.openSectionDetail = openSectionDetail;
+window.closeSectionModal = closeSectionModal;
+window.sectionSleepAll = sectionSleepAll;
+window.sectionWakeAll = sectionWakeAll;
 
 // Toggle miner find mode (LED blinking)
 async function toggleFindMiner(minerIp) {

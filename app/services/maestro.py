@@ -71,6 +71,7 @@ class Maestro:
         self._meter_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._last_meter_kw: Optional[float] = None
+        self._last_plant_kw: Optional[float] = None
         self._last_voltage: Optional[float] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────
@@ -269,6 +270,7 @@ class Maestro:
             "rated_power_kw": round(self.rated_power_kw, 1),
             "active_power_kw": round(self.active_power_kw, 1),
             "measured_power_kw": round(self._last_meter_kw, 1) if self._last_meter_kw is not None else None,
+            "plant_power_kw": round(self._last_plant_kw, 1) if self._last_plant_kw is not None else None,
             "voltage": round(self._last_voltage, 1) if self._last_voltage is not None else None,
             "target_power_kw": round(self._target_power_kw, 1) if self._target_power_kw is not None else None,
             "total_miners": total,
@@ -297,6 +299,7 @@ class Maestro:
                 reading = await self.power_meter.get_power()
                 if reading:
                     self._last_meter_kw = reading.miners_total_power_kw
+                    self._last_plant_kw = reading.plant_total_power_kw
                     self._last_voltage = reading.voltage
 
                     # Power loss detection: voltage=0 → emergency deactivate
@@ -351,6 +354,7 @@ class Maestro:
                 miners_total=status.get("total_miners", 0),
                 fleet_state=status.get("state"),
                 measured_power_kw=status.get("measured_power_kw"),
+                plant_power_kw=status.get("plant_power_kw"),
                 voltage=status.get("voltage"),
                 target_power_kw=status.get("target_power_kw"),
             )
