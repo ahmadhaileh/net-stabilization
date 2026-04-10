@@ -4,7 +4,8 @@ EMS API Routes.
 These routes implement the EMS protocol specification for third-party device integration.
 All endpoints are exposed under /api/ prefix.
 """
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
+from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 import structlog
 
@@ -15,7 +16,7 @@ from app.models.ems import (
     CommandResponse,
     RunningStatus
 )
-from app.services.fleet_manager import get_fleet_manager
+from app.services.maestro import get_maestro
 
 logger = structlog.get_logger()
 
@@ -81,28 +82,19 @@ async def get_status():
     - Current active power consumption (kW)
     """
     try:
-        fleet_manager = get_fleet_manager()
-        status = fleet_manager.status
-        
-        # Log for debugging
-        logger.debug(
-            "Status request",
-            available=status.is_available_for_dispatch,
-            running_status=status.running_status,
-            active_power=status.active_power_kw
-        )
+        maestro = get_maestro()
         
         return StatusResponse(
-            is_available_for_dispatch=status.is_available_for_dispatch,
-            running_status=status.running_status.value,
-            rated_power_in_kw=round(status.rated_power_kw, 2),
-            active_power_in_kw=round(status.active_power_kw, 2)
+            is_available_for_dispatch=maestro.is_available,
+            running_status=maestro.running_status.value,
+            rated_power_in_kw=round(maestro.rated_power_kw, 2),
+            active_power_in_kw=round(maestro.active_power_kw, 2),
         )
         
     except Exception as e:
         logger.error("Failed to get status", error=str(e))
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
                 "accepted": False,
                 "message": f"Fleet status unavailable: {str(e)}"
@@ -168,52 +160,36 @@ async def activate(request: ActivateRequest):
     a 400 error is returned.
     """
     try:
-        fleet_manager = get_fleet_manager()
-        
-        # Check for manual override
-        if fleet_manager.status.manual_override_active:
-            logger.warning(
-                "Activation rejected - manual override active",
-                requested_power=request.activation_power_in_kw
-            )
-            return JSONResponse(
-                status_code=status.HTTP_409_CONFLICT,
-                content={
-                    "accepted": False,
-                    "message": "Manual override is active. Command rejected."
-                }
-            )
+        maestro = get_maestro()
         
         logger.info(
             "Activation request received",
             power_kw=request.activation_power_in_kw
         )
         
-        # Attempt activation
-        success, message = await fleet_manager.activate(
+        success, message = await maestro.activate(
             request.activation_power_in_kw
         )
         
         if success:
             return CommandResponse(accepted=True, message=message)
         else:
-            # Determine appropriate error code
             if "exceeds" in message.lower():
-                status_code = status.HTTP_400_BAD_REQUEST
-            elif "not available" in message.lower() or "fault" in message.lower():
-                status_code = status.HTTP_409_CONFLICT
+                code = http_status.HTTP_400_BAD_REQUEST
+            elif "not available" in message.lower() or "fault" in message.lower() or "power loss" in message.lower():
+                code = http_status.HTTP_409_CONFLICT
             else:
-                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+                code = http_status.HTTP_500_INTERNAL_SERVER_ERROR
             
             return JSONResponse(
-                status_code=status_code,
+                status_code=code,
                 content={"accepted": False, "message": message}
             )
             
     except Exception as e:
         logger.error("Activation failed", error=str(e))
         return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "accepted": False,
                 "message": f"Internal error: {str(e)}"
@@ -268,41 +244,29 @@ async def deactivate(request: DeactivateRequest = None):
     this is a no-op and success is returned.
     """
     try:
-        fleet_manager = get_fleet_manager()
-        
-        # Check for manual override
-        if fleet_manager.status.manual_override_active:
-            logger.warning("Deactivation rejected - manual override active")
-            return JSONResponse(
-                status_code=status.HTTP_409_CONFLICT,
-                content={
-                    "accepted": False,
-                    "message": "Manual override is active. Command rejected."
-                }
-            )
+        maestro = get_maestro()
         
         logger.info("Deactivation request received")
         
-        # Attempt deactivation
-        success, message = await fleet_manager.deactivate()
+        success, message = await maestro.deactivate()
         
         if success:
             return CommandResponse(accepted=True, message=message)
         else:
-            status_code = (
-                status.HTTP_409_CONFLICT
+            code = (
+                http_status.HTTP_409_CONFLICT
                 if "fault" in message.lower()
-                else status.HTTP_500_INTERNAL_SERVER_ERROR
+                else http_status.HTTP_500_INTERNAL_SERVER_ERROR
             )
             return JSONResponse(
-                status_code=status_code,
+                status_code=code,
                 content={"accepted": False, "message": message}
             )
             
     except Exception as e:
         logger.error("Deactivation failed", error=str(e))
         return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "accepted": False,
                 "message": f"Internal error: {str(e)}"

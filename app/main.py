@@ -25,9 +25,8 @@ logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
 )
 from app.api.ems import router as ems_router
-from app.api.dashboard import router as dashboard_router
-from app.services.fleet_manager import get_fleet_manager
-from app.services.awesome_miner import get_awesome_miner_client
+from app.api.dashboard_v2 import router as dashboard_router
+from app.services.maestro import get_maestro
 
 # Configure structured logging
 structlog.configure(
@@ -55,37 +54,22 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager for startup/shutdown."""
-    # Startup
-    logger.info(
-        "Starting Grid Stabilization server",
-        awesome_miner_host=settings.awesome_miner_host,
-        awesome_miner_port=settings.awesome_miner_port
-    )
+    logger.info("Starting Grid Stabilization server")
     
-    # Initialize services
-    fleet_manager = get_fleet_manager()
-        
-    # Start background polling
-    await fleet_manager.start_polling()
+    # Initialize Maestro: discover miners, create sections
+    maestro = get_maestro()
+    await maestro.initialize()
     
-    # Initial status update
-    try:
-        await fleet_manager.update_status()
-        logger.info("Initial status update completed")
-    except Exception as e:
-        logger.warning("Initial status update failed", error=str(e))
+    # Start background tasks (polling, regulation, meter)
+    await maestro.start()
+    
+    logger.info("Maestro started", sections=len(maestro.sections))
     
     yield
     
     # Shutdown
     logger.info("Shutting down Grid Stabilization server")
-    
-    # Stop background tasks
-    await fleet_manager.stop_polling()
-    
-    # Close clients
-    am_client = get_awesome_miner_client()
-    await am_client.close()
+    await maestro.stop()
 
 
 # Create FastAPI application
@@ -153,11 +137,12 @@ async def health_check():
     Returns basic health status of the application.
     """
     try:
-        fleet_manager = get_fleet_manager()
+        maestro = get_maestro()
+        status = maestro.get_status()
         return {
             "status": "healthy",
-            "fleet_state": fleet_manager.status.state.value,
-            "miners_online": fleet_manager.status.online_miners
+            "fleet_state": status["state"],
+            "miners_online": status["online_miners"]
         }
     except Exception as e:
         return JSONResponse(
