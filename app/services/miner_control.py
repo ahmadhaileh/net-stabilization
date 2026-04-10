@@ -244,7 +244,12 @@ async def poll_miner(miner: Miner) -> MinerState:
         miner.ip, "/cgi-bin/get_miner_status.cgi", timeout=3.0
     )
     if ok and status_data:
-        _parse_vnish_status(miner, status_data)
+        if isinstance(status_data, dict):
+            _parse_vnish_status(miner, status_data)
+        else:
+            # Malformed JSON = sleeping miner (CGMiner not fully running)
+            miner.hashrate_ghs = 0
+            miner.power_watts = 0
         miner.consecutive_failures = 0
         miner.last_seen = datetime.utcnow()
         if miner.hashrate_ghs > 0:
