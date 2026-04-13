@@ -217,8 +217,24 @@ class SectionManager:
                 miner.clear_wake_failures()
                 logger.info("miner_wake_confirmed", ip=miner.ip, section=self.section_id)
 
+            # Detect wake failure: came back sleeping (wake didn't stick)
+            # Allow 45s for the miner to actually reboot before declaring failure
+            elif miner.ip in self._pending_wakes and new_state == MinerState.SLEEPING:
+                wake_time = self._pending_wakes[miner.ip]
+                age = (datetime.utcnow() - wake_time).total_seconds()
+                if age > 45:
+                    del self._pending_wakes[miner.ip]
+                    miner.record_wake_failure()
+                    logger.warning(
+                        "miner_wake_returned_sleeping",
+                        ip=miner.ip,
+                        section=self.section_id,
+                        age_s=round(age),
+                        failures=miner.consecutive_wake_failures,
+                    )
+
             # Detect wake failure: pending too long
-            if miner.ip in self._pending_wakes:
+            elif miner.ip in self._pending_wakes:
                 wake_time = self._pending_wakes[miner.ip]
                 if (datetime.utcnow() - wake_time).total_seconds() > self._wake_grace_seconds:
                     del self._pending_wakes[miner.ip]
