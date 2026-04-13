@@ -34,6 +34,8 @@ logger = structlog.get_logger()
 # Conservative per-miner power for calculations.
 # Real S9 draws ~1.35-1.45 kW; using 1.4 as default.
 DEFAULT_PER_MINER_KW = 1.4
+# Idle/sleeping miner standby draw (PSU + control board fans).
+IDLE_PER_MINER_KW = 0.03
 
 
 class SectionManager:
@@ -111,15 +113,18 @@ class SectionManager:
 
     @property
     def active_power_kw(self) -> float:
-        """Current power from mining miners (estimated)."""
-        return len(self.mining_miners) * self.per_miner_kw
+        """Current power estimate: mining miners at full draw + sleeping miners at idle draw."""
+        mining = len(self.mining_miners) * self.per_miner_kw
+        sleeping = len(self.sleeping_miners) * IDLE_PER_MINER_KW
+        return mining + sleeping
 
     @property
     def expected_power_kw(self) -> float:
         """Power including pending wakes (for regulation decisions)."""
-        active = len(self.mining_miners)
+        mining = len(self.mining_miners)
         pending = self._count_valid_pending()
-        return (active + pending) * self.per_miner_kw
+        sleeping = len(self.sleeping_miners) - pending
+        return (mining + pending) * self.per_miner_kw + max(0, sleeping) * IDLE_PER_MINER_KW
 
     @property
     def target_power_kw(self) -> Optional[float]:
