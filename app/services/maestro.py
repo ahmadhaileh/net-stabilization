@@ -78,7 +78,7 @@ class Maestro:
         # When the meter shows less power than the target, we increase section
         # targets proportionally so they wake more miners.
         self._feedback_effective_target: Optional[float] = None  # Current corrected target
-        self._feedback_correction_factor: float = 1.5  # Learned ratio — start high to max dispatch (boot failure ~40%)
+        self._feedback_correction_factor: float = 1.2  # Learned ratio — safety net for boot failures (~20%)
         self._last_feedback_time: Optional[datetime] = None
         self._activation_start_time: Optional[datetime] = None  # When fleet first went RUNNING
         self._feedback_warmup_seconds: int = 120  # Wait for miners to actually boot (~90s boot + buffer)
@@ -446,9 +446,19 @@ class Maestro:
         Only scale DOWN sections when meter > target (truly overshooting).
         """
         target = self._target_power_kw
-        meter = self._last_meter_kw
-        if not target or target <= 0 or meter is None:
+        raw_meter = self._last_meter_kw
+        if not target or target <= 0 or raw_meter is None:
             return
+
+        # Subtract idle baseline: the meter reads ALL miner power including
+        # sleeping miners' PSU standby (~51W each AC-side).  The EMS target
+        # is *mining* power only, so we must remove the idle floor before
+        # comparing.
+        total_sleeping = sum(
+            s.get_status().get("sleeping_miners", 0) for s in self.sections
+        )
+        idle_baseline_kw = total_sleeping * 0.051  # 51W AC-side per sleeping miner
+        meter = max(0.0, raw_meter - idle_baseline_kw)
 
         # Warmup: wait for miners to actually boot (90s+ boot time)
         if self._activation_start_time:
@@ -480,7 +490,7 @@ class Maestro:
         # toward the ideal correction, retaining 70% of previous estimate.
         if meter > 5.0:
             instant_correction = target / meter
-            instant_correction = max(0.85, min(instant_correction, 1.5))
+            instant_correction = max(0.85, min(instant_correction, 1.2))
             alpha = 0.3
             self._feedback_correction_factor = (
                 alpha * instant_correction
@@ -501,7 +511,9 @@ class Maestro:
         logger.info(
             "meter_feedback_adjust",
             target_kw=round(target, 1),
-            meter_kw=round(meter, 1),
+            raw_meter_kw=round(raw_meter, 1),
+            meter_minus_idle_kw=round(meter, 1),
+            idle_baseline_kw=round(idle_baseline_kw, 1),
             error_kw=round(error, 1),
             correction_factor=round(self._feedback_correction_factor, 3),
             effective_target_kw=round(effective, 1),
