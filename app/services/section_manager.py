@@ -32,8 +32,8 @@ from app.services.miner_control import (
 logger = structlog.get_logger()
 
 # Conservative per-miner power for calculations.
-# Real S9 draws ~1.35-1.45 kW; using 1.4 as default.
-DEFAULT_PER_MINER_KW = 1.4
+# Real S9 draws ~1.5 kW on Vnish 3.9.0 at the meter.
+DEFAULT_PER_MINER_KW = 1.5
 # Idle/sleeping miner standby draw (PSU + control board fans).
 IDLE_PER_MINER_KW = 0.03
 
@@ -54,7 +54,7 @@ class SectionManager:
         section_id: str,
         miner_ips: List[str],
         per_miner_kw: float = DEFAULT_PER_MINER_KW,
-        wake_delay_seconds: float = 1.0,
+        wake_delay_seconds: float = 0.5,
     ):
         self.section_id = section_id
         self.per_miner_kw = per_miner_kw
@@ -70,7 +70,7 @@ class SectionManager:
 
         # Pending wakes — IPs we sent wake to but haven't seen mining yet
         self._pending_wakes: Dict[str, datetime] = {}
-        self._wake_grace_seconds = 180  # 3 min for boot + detection
+        self._wake_grace_seconds = 180  # Cleanup for non-sleeping states
 
         # Background tasks
         self._poll_task: Optional[asyncio.Task] = None
@@ -103,11 +103,12 @@ class SectionManager:
 
     @property
     def available_miners(self) -> List[Miner]:
-        """Miners that could be woken (sleeping + not backed off + not already pending)."""
+        """Miners that could be woken (sleeping + not transitioning + not already pending)."""
         return [
             m for m in self.miners.values()
             if m.state == MinerState.SLEEPING
             and not m.is_wake_backed_off
+            and not m.is_transitioning
             and m.ip not in self._pending_wakes
         ]
 
@@ -217,33 +218,39 @@ class SectionManager:
                 miner.clear_wake_failures()
                 logger.info("miner_wake_confirmed", ip=miner.ip, section=self.section_id)
 
-            # Detect wake failure: came back sleeping (wake didn't stick)
-            # Allow 45s for the miner to actually reboot before declaring failure
+            # Secondary: miner transitioned to MINING without being in pending_wakes
+            # (e.g. was removed from pending prematurely by old 45s threshold).
+            # Clear accumulated failures so the miner isn't penalised for a successful boot.
+            elif new_state == MinerState.MINING and old_state != MinerState.MINING:
+                if miner.consecutive_wake_failures > 0:
+                    miner.clear_wake_failures()
+                    logger.info("miner_wake_confirmed_late", ip=miner.ip, section=self.section_id)
+
+            # Pending wake expired: miner returned sleeping (wake didn't stick)
+            # Remove from pending WITHOUT recording failure or imposing backoff.
+            # This allows the regulation loop to immediately re-wake the miner
+            # on its next cycle, giving intermittent miners multiple attempts.
             elif miner.ip in self._pending_wakes and new_state == MinerState.SLEEPING:
                 wake_time = self._pending_wakes[miner.ip]
                 age = (datetime.utcnow() - wake_time).total_seconds()
-                if age > 45:
+                if age > 150:
                     del self._pending_wakes[miner.ip]
-                    miner.record_wake_failure()
-                    logger.warning(
-                        "miner_wake_returned_sleeping",
+                    logger.debug(
+                        "miner_wake_expired",
                         ip=miner.ip,
                         section=self.section_id,
                         age_s=round(age),
-                        failures=miner.consecutive_wake_failures,
                     )
 
-            # Detect wake failure: pending too long
+            # Pending wake expired: still in non-sleeping/non-mining state too long
             elif miner.ip in self._pending_wakes:
                 wake_time = self._pending_wakes[miner.ip]
                 if (datetime.utcnow() - wake_time).total_seconds() > self._wake_grace_seconds:
                     del self._pending_wakes[miner.ip]
-                    miner.record_wake_failure()
-                    logger.warning(
+                    logger.debug(
                         "miner_wake_timeout",
                         ip=miner.ip,
                         section=self.section_id,
-                        failures=miner.consecutive_wake_failures,
                     )
 
         tasks = [_poll_one(m) for m in self.miners.values()]
@@ -277,15 +284,16 @@ class SectionManager:
                 await self._sleep_all()
             return
 
-        # Tolerance: ±1 miner
-        if abs(expected_count - miners_needed) <= 1:
+        # Tolerance: ±2 miners (wider deadband prevents wake/sleep churn
+        # when targets oscillate slightly from feedback adjustments)
+        if abs(expected_count - miners_needed) <= 2:
             return  # Close enough
 
-        if expected_count > miners_needed + 1:
+        if expected_count > miners_needed + 2:
             # Too many — trim down
             excess = expected_count - miners_needed
             await self._trim_miners(excess)
-        elif expected_count < miners_needed - 1:
+        elif expected_count < miners_needed - 2:
             # Too few — wake more
             deficit = miners_needed - expected_count
             await self._wake_miners(deficit)
@@ -303,12 +311,11 @@ class SectionManager:
             "waking_miners",
             section=self.section_id,
             count=len(to_wake),
-            ips=[m.ip for m in to_wake],
         )
 
         for i, miner in enumerate(to_wake):
-            if i > 0 and self.wake_delay_seconds > 0:
-                await asyncio.sleep(self.wake_delay_seconds)
+            if i > 0:
+                await asyncio.sleep(0.5)
 
             async with self._cmd_semaphore:
                 ok = await wake_miner(miner.ip)

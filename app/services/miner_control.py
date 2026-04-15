@@ -243,22 +243,22 @@ async def poll_miner(miner: Miner) -> MinerState:
     ok, status_data = await _vnish_request(
         miner.ip, "/cgi-bin/get_miner_status.cgi", timeout=3.0
     )
+    vnish_reachable = ok  # Track whether web server responded at all
     if ok and status_data:
         if isinstance(status_data, dict):
             _parse_vnish_status(miner, status_data)
-        else:
-            # Malformed JSON = sleeping miner (CGMiner not fully running)
-            miner.hashrate_ghs = 0
-            miner.power_watts = 0
-        miner.consecutive_failures = 0
-        miner.last_seen = datetime.utcnow()
-        if miner.hashrate_ghs > 0:
-            miner.state = MinerState.MINING
-        else:
-            miner.state = MinerState.SLEEPING
-        return miner.state
+            miner.consecutive_failures = 0
+            miner.last_seen = datetime.utcnow()
+            if miner.hashrate_ghs > 0:
+                miner.state = MinerState.MINING
+            else:
+                miner.state = MinerState.SLEEPING
+            return miner.state
+        # Malformed JSON (string response) — Vnish returns broken JSON
+        # even while actively mining. Don't assume sleeping; fall through
+        # to CGMiner TCP which returns clean data.
 
-    # Try CGMiner TCP — some miners may have web UI down but CGMiner up
+    # Try CGMiner TCP — reliable even when Vnish JSON is broken
     summary = await cgminer_command(miner.ip, "summary", timeout=3.0)
     if summary and "SUMMARY" in summary:
         _parse_cgminer_summary(miner, summary)
@@ -270,7 +270,16 @@ async def poll_miner(miner: Miner) -> MinerState:
             miner.state = MinerState.SLEEPING
         return miner.state
 
-    # Both failed
+    # Both failed — but if Vnish web server responded, miner is alive (sleeping)
+    if vnish_reachable:
+        miner.consecutive_failures = 0
+        miner.last_seen = datetime.utcnow()
+        miner.hashrate_ghs = 0
+        miner.power_watts = 0
+        miner.state = MinerState.SLEEPING
+        return miner.state
+
+    # Truly unreachable
     miner.consecutive_failures += 1
     if miner.consecutive_failures >= 3:
         miner.state = MinerState.OFFLINE

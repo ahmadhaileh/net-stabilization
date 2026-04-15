@@ -39,9 +39,9 @@ from app.models.state import FleetState
 
 logger = structlog.get_logger()
 
-# How many miners per section (~50 kW at 1.4 kW each)
+# How many miners per section (~54 kW at 1.5 kW each)
 MINERS_PER_SECTION = 36
-DEFAULT_PER_MINER_KW = 1.4
+DEFAULT_PER_MINER_KW = 1.5
 
 
 class Maestro:
@@ -73,6 +73,16 @@ class Maestro:
         self._last_meter_kw: Optional[float] = None
         self._last_plant_kw: Optional[float] = None
         self._last_voltage: Optional[float] = None
+
+        # Closed-loop meter feedback — corrects for per_miner_kw inaccuracy.
+        # When the meter shows less power than the target, we increase section
+        # targets proportionally so they wake more miners.
+        self._feedback_effective_target: Optional[float] = None  # Current corrected target
+        self._feedback_correction_factor: float = 1.5  # Learned ratio — start high to max dispatch (boot failure ~40%)
+        self._last_feedback_time: Optional[datetime] = None
+        self._activation_start_time: Optional[datetime] = None  # When fleet first went RUNNING
+        self._feedback_warmup_seconds: int = 120  # Wait for miners to actually boot (~90s boot + buffer)
+        self._feedback_cooldown_seconds: int = 20  # Min time between adjustments
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
@@ -185,6 +195,8 @@ class Maestro:
                 return False, "Power loss detected (voltage=0), cannot activate"
 
             clamped = min(target_power_kw, rated)
+            old_target = self._target_power_kw
+            was_running = self._state == FleetState.RUNNING
             self._target_power_kw = clamped
             self._last_ems_command = datetime.utcnow()
 
@@ -192,15 +204,20 @@ class Maestro:
                 # Effectively zero — deactivate
                 return await self._do_deactivate()
 
-            # Distribute to sections (fill to capacity in order)
-            remaining = clamped
-            for section in self.sections:
-                if remaining <= 0:
-                    section.set_target(0)
-                else:
-                    section_target = min(remaining, section.rated_power_kw)
-                    section.set_target(section_target)
-                    remaining -= section_target
+            if was_running:
+                # ── Retarget while running ──
+                # Key rule: NEVER reduce a section below its current target
+                # when the new EMS target is >= old target.  This prevents
+                # the "dip" where miners get needlessly put to sleep.
+                self._distribute_retarget(clamped, old_target)
+            else:
+                # Fresh activation from standby
+                # Preserve learned correction_factor — it carries over from
+                # previous runs so we dispatch the right count immediately.
+                self._feedback_effective_target = None
+                self._last_feedback_time = None
+                self._activation_start_time = datetime.utcnow()
+                self._distribute_fresh(clamped)
 
             self._state = FleetState.RUNNING
 
@@ -213,6 +230,96 @@ class Maestro:
             )
             return True, f"Activating at {clamped:.1f} kW"
 
+    # ── Target Distribution ───────────────────────────────────────
+
+    def _distribute_fresh(self, target_kw: float):
+        """Distribute target EVENLY across all sections for a fresh activation.
+
+        Even distribution ensures all sections start waking miners simultaneously,
+        maximizing parallelism and reducing time to target.
+        """
+        # Apply learned correction factor (compensates boot failures + per_miner_kw gap)
+        effective = min(target_kw * self._feedback_correction_factor, self.rated_power_kw)
+        logger.info(
+            "fresh_activation_distribute",
+            raw_target_kw=round(target_kw, 1),
+            correction_factor=round(self._feedback_correction_factor, 3),
+            effective_kw=round(effective, 1),
+        )
+        self._feedback_effective_target = effective
+
+        # Spread evenly across all sections, capping at each section's rated power
+        n = len(self.sections)
+        per_section = effective / n
+        for section in self.sections:
+            section_target = min(per_section, section.rated_power_kw)
+            section.set_target(section_target)
+
+    def _distribute_retarget(self, new_target_kw: float, old_target_kw: float):
+        """
+        Redistribute power when retargeting while already running.
+
+        Key invariant: when raising the target, NEVER reduce any section's
+        current target.  This prevents miners from being put to sleep and
+        then immediately re-woken (the "dip").
+
+        When lowering the target, scale down proportionally so no single
+        section bears all the reduction.
+        """
+        # Get current section targets (what sections are actually working toward)
+        current_targets = []
+        for s in self.sections:
+            st = s.get_status()
+            current_targets.append(st.get("target_power_kw") or 0.0)
+
+        current_total = sum(current_targets)
+
+        # Apply learned correction factor to the new target
+        if self._feedback_correction_factor > 1.0:
+            effective = min(
+                new_target_kw * self._feedback_correction_factor,
+                self.rated_power_kw,
+            )
+        else:
+            effective = new_target_kw
+
+        self._feedback_effective_target = effective
+        # Short cooldown before feedback loop refines further
+        self._last_feedback_time = datetime.utcnow()
+
+        logger.info(
+            "maestro_retarget",
+            old_target_kw=round(old_target_kw or 0, 1),
+            new_target_kw=round(new_target_kw, 1),
+            correction_factor=round(self._feedback_correction_factor, 3),
+            effective_kw=round(effective, 1),
+            current_section_total_kw=round(current_total, 1),
+            current_section_targets=[round(t, 1) for t in current_targets],
+        )
+
+        if effective >= current_total:
+            # ── Raising or maintaining: keep existing targets, distribute extra ──
+            extra = effective - current_total
+            for i, section in enumerate(self.sections):
+                headroom = section.rated_power_kw - current_targets[i]
+                add = min(extra, headroom)
+                if add > 0.5:
+                    new_st = current_targets[i] + add
+                    section.set_target(new_st)
+                    extra -= add
+                # If add <= 0.5, don't bother sending a command — no change
+        else:
+            # ── Lowering: scale down proportionally ──
+            if current_total > 0:
+                scale = effective / current_total
+            else:
+                scale = 0.0
+            for i, section in enumerate(self.sections):
+                new_st = current_targets[i] * scale
+                if new_st < 1.0:
+                    new_st = 0.0
+                section.set_target(new_st)
+
     async def deactivate(self) -> tuple[bool, str]:
         """Deactivate the fleet — sleep all sections."""
         async with self._lock:
@@ -222,6 +329,11 @@ class Maestro:
     async def _do_deactivate(self) -> tuple[bool, str]:
         """Internal deactivation (must hold lock)."""
         self._target_power_kw = 0.0
+        self._feedback_effective_target = None
+        self._last_feedback_time = None
+        # Preserve _feedback_correction_factor — learned ratio carries over
+        # so future activations dispatch the right number of miners immediately.
+        self._activation_start_time = None
         self._state = FleetState.DEACTIVATING
 
         for section in self.sections:
@@ -313,9 +425,121 @@ class Maestro:
                         logger.error("power_loss_detected", voltage=0)
                         async with self._lock:
                             await self._do_deactivate()
+
+                    # Closed-loop feedback: adjust section targets when meter
+                    # shows we're not hitting the EMS target.
+                    elif self._state == FleetState.RUNNING and self._target_power_kw:
+                        self._apply_meter_feedback()
             except Exception as e:
                 logger.warning("meter_error", error=str(e))
             await asyncio.sleep(5)
+
+    def _apply_meter_feedback(self):
+        """
+        Closed-loop meter feedback: compare measured power to EMS target
+        and redistribute section targets to compensate.
+
+        CRITICAL RULE: When meter < target (undershooting), we ONLY increase
+        section targets — never decrease.  Decreasing while undershooting
+        causes the wake/sleep oscillation that destroys convergence.
+
+        Only scale DOWN sections when meter > target (truly overshooting).
+        """
+        target = self._target_power_kw
+        meter = self._last_meter_kw
+        if not target or target <= 0 or meter is None:
+            return
+
+        # Warmup: wait for miners to actually boot (90s+ boot time)
+        if self._activation_start_time:
+            elapsed = (datetime.utcnow() - self._activation_start_time).total_seconds()
+            if elapsed < self._feedback_warmup_seconds:
+                return
+
+        # Don't adjust until meaningful number of miners are online
+        total_mining = sum(
+            s.get_status().get("mining_miners", 0) for s in self.sections
+        )
+        if total_mining < 10:
+            return
+
+        # Cooldown: don't adjust more often than every N seconds
+        if self._last_feedback_time:
+            since_last = (datetime.utcnow() - self._last_feedback_time).total_seconds()
+            if since_last < self._feedback_cooldown_seconds:
+                return
+
+        tolerance_kw = target * 0.05  # 5% tolerance band (matches test criteria)
+        error = target - meter  # positive = undershooting, negative = overshooting
+
+        if abs(error) <= tolerance_kw:
+            return  # Within tolerance — nothing to do
+
+        # Update correction factor with conservative smoothing.
+        # alpha=0.3 prevents wild swings — each iteration moves only 30%
+        # toward the ideal correction, retaining 70% of previous estimate.
+        if meter > 5.0:
+            instant_correction = target / meter
+            instant_correction = max(0.85, min(instant_correction, 1.5))
+            alpha = 0.3
+            self._feedback_correction_factor = (
+                alpha * instant_correction
+                + (1 - alpha) * self._feedback_correction_factor
+            )
+
+        effective = target * self._feedback_correction_factor
+        effective = min(effective, self.rated_power_kw)
+
+        # Don't redistribute if effective target barely changed
+        current_effective = self._feedback_effective_target or target
+        if abs(effective - current_effective) < 1.0:
+            return
+
+        self._feedback_effective_target = effective
+        self._last_feedback_time = datetime.utcnow()
+
+        logger.info(
+            "meter_feedback_adjust",
+            target_kw=round(target, 1),
+            meter_kw=round(meter, 1),
+            error_kw=round(error, 1),
+            correction_factor=round(self._feedback_correction_factor, 3),
+            effective_target_kw=round(effective, 1),
+            mining_count=total_mining,
+        )
+
+        # Get current section targets
+        current_targets = []
+        for s in self.sections:
+            st = s.get_status()
+            current_targets.append(st.get("target_power_kw") or 0.0)
+        current_total = sum(current_targets)
+
+        if error > 0:
+            # ── UNDERSHOOTING (meter < target): only INCREASE, never reduce ──
+            if effective > current_total:
+                extra = effective - current_total
+                n = len(self.sections)
+                per_section_add = extra / n
+                for i, section in enumerate(self.sections):
+                    headroom = section.rated_power_kw - current_targets[i]
+                    add = min(per_section_add, headroom)
+                    if add > 0.5:
+                        section.set_target(current_targets[i] + add)
+            # If effective <= current_total but meter < target, do NOTHING.
+            # The miners just need more time to come online.
+        else:
+            # ── OVERSHOOTING (meter > target): scale down proportionally ──
+            if current_total > 0:
+                scale = effective / current_total
+                scale = max(scale, 0.5)  # Never cut more than 50% at once
+            else:
+                scale = 0.0
+            for i, section in enumerate(self.sections):
+                new_st = current_targets[i] * scale
+                if new_st < 1.0:
+                    new_st = 0.0
+                section.set_target(new_st)
 
     # ── Snapshot Recording ────────────────────────────────────────
 

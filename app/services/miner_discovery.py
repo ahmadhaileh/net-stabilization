@@ -623,15 +623,31 @@ class VnishWebAPI:
         """
         Perform full system reboot.
         
+        Stock Bitmain firmware requires POST with a body for reboot.cgi
+        (GET returns 411 Length Required).
+        
         Returns:
             True if reboot command was sent successfully
         """
+        url = f"{self.base_url}/cgi-bin/reboot.cgi"
         try:
-            await self._request("/cgi-bin/reboot.cgi")
-            logger.info("Vnish: System reboot initiated", host=self.host)
-            return True
+            auth = httpx.DigestAuth(self.username, self.password)
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                try:
+                    response = await client.post(
+                        url, auth=auth, data={"reboot": "1"},
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                    if response.status_code == 200:
+                        logger.info("System reboot initiated", host=self.host)
+                        return True
+                except httpx.TimeoutException:
+                    # Reboot may kill the connection before response arrives
+                    logger.info("System reboot initiated (connection closed, expected)", host=self.host)
+                    return True
+            return False
         except Exception as e:
-            logger.error("Vnish: Failed to reboot", host=self.host, error=str(e))
+            logger.error("Failed to reboot", host=self.host, error=str(e))
             return False
     
     async def _post_config(self, endpoint: str, data: Dict[str, str]) -> Dict[str, Any]:
@@ -2138,91 +2154,97 @@ class MinerDiscoveryService:
     
     async def _disable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Put miner into idle mode using Vnish sleep mode API.
+        Put miner into idle mode by stopping bmminer.
         
-        This uses the do_sleep_mode.cgi endpoint which is the safest way
-        to pause mining - it preserves all config and pools.
-        
-        NO fallback to CGMiner API pool manipulation - that breaks configs!
+        Uses stop_bmminer.cgi which works reliably on both stock Bitmain
+        and Vnish firmware.  Falls back to do_sleep_mode.cgi for older
+        Vnish builds that lack stop_bmminer.cgi.
         """
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            logger.info("Setting miner to sleep mode", ip=miner.ip)
+            logger.info("Stopping bmminer on miner", ip=miner.ip)
             
             # Mark that we're sending a command - miner may fluctuate for ~30s
             miner.mark_command_sent('sleep', grace_seconds=45)
             
-            # Use sleep mode API directly - don't check is_vnish_available
-            # because that might fail if CGMiner is already in a weird state
-            if await vnish.set_sleep_mode(enable=True):
+            # Primary: stop_bmminer.cgi — works on stock Bitmain and Vnish
+            if await vnish.stop_cgminer():
                 miner.power_mode = MinerPowerMode.IDLE
                 miner.is_mining = False
                 miner.hashrate_ghs = 0
                 # Stop poking this miner — it's being put to sleep
                 self.unregister_waking_miner(miner.ip)
+                logger.info("Miner bmminer stopped (idle)", ip=miner.ip)
+                return True, "Miner bmminer stopped (idle)"
+            
+            # Fallback: sleep mode API (Vnish only)
+            logger.info("stop_bmminer failed, trying sleep mode", ip=miner.ip)
+            if await vnish.set_sleep_mode(enable=True):
+                miner.power_mode = MinerPowerMode.IDLE
+                miner.is_mining = False
+                miner.hashrate_ghs = 0
+                self.unregister_waking_miner(miner.ip)
                 logger.info("Miner entered sleep mode", ip=miner.ip)
                 return True, "Miner entered sleep mode"
-            else:
-                logger.warning("Sleep mode command failed", ip=miner.ip)
-                return False, "Failed to set sleep mode"
+            
+            logger.warning("All idle methods failed", ip=miner.ip)
+            return False, "Failed to idle miner"
                 
         except Exception as e:
-            logger.error("Failed to set sleep mode", ip=miner.ip, error=str(e))
+            logger.error("Failed to idle miner", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def _enable_miner_pools(self, miner: DiscoveredMiner) -> Tuple[bool, str]:
         """
-        Wake miner from sleep mode using Vnish sleep mode API.
+        Wake miner from idle by rebooting the system.
         
-        This uses the do_sleep_mode.cgi endpoint with mode=0 which
-        wakes the miner and resumes mining.
+        Stock Bitmain firmware has no way to start bmminer without a full
+        reboot (start_bmminer.cgi doesn't exist, do_sleep_mode.cgi mode=0
+        returns OK but the dosleep API command is access-denied).
         
-        NOTE: Waking takes 45-60 seconds. During this time:
-        - Miner may appear offline briefly
-        - Then idle again
-        - Then finally mining
+        Strategy:
+        1. Try reboot_cgminer.cgi (works on Vnish, 404 on stock)
+        2. Fall back to full system reboot via reboot.cgi (works everywhere)
+        
+        NOTE: Wake takes 90-150 seconds (full reboot + bmminer startup).
         """
         # Skip if miner is already in the poke queue (still booting).
-        # The regulation loop may re-call this for miners that appear "idle"
-        # because CGMiner hasn't finished initialising yet.  Re-sending the
-        # wake command resets the boot process and prevents convergence.
         if miner.ip in self._waking_miners:
             elapsed = (datetime.utcnow() - self._waking_miners[miner.ip]).total_seconds()
-            logger.info("Skipping wake — miner already booting (poke active)",
+            logger.info("Skipping wake — miner already booting",
                         ip=miner.ip, booting_for_s=round(elapsed))
-            return True, "Already waking (poke active)"
+            return True, "Already waking"
 
         vnish = VnishWebAPI(miner.ip)
         
         try:
-            logger.info("Waking miner from sleep mode", ip=miner.ip)
+            logger.info("Waking miner via reboot", ip=miner.ip)
             
-            # Mark that we're sending a wake command
-            # Miners boot in 60-90s, detection via CGMiner takes ~30s more.
-            # 180s grace matches fleet-level _wake_grace_seconds.
-            # Shorter = failed-boot miners return to idle pool sooner for re-wake.
+            # Reboot takes 90-150s total. Grace period matches fleet-level
+            # _wake_grace_seconds so the regulation loop doesn't re-trigger.
             miner.mark_command_sent('wake', grace_seconds=180)
             
-            # Use sleep mode API directly to wake - don't check is_vnish_available
-            # because that calls get_system_info which might fail when sleeping
-            if await vnish.set_sleep_mode(enable=False):
-                # DON'T set power_mode to NORMAL yet — leave as IDLE so the fast-path
-                # Vnish poll is used during boot. CGMiner port 4028 won't respond for
-                # 60-90s, and hitting it wastes 5s per miner per poll cycle.
-                # power_mode gets set to NORMAL once Vnish detects hashrate > 0.
-                # Don't set is_mining=True yet - will be confirmed on next status update
-                logger.info("Miner wake command sent - will take 45-60s to resume", ip=miner.ip)
-                # Register for continuous HTTP poking — Vnish firmware needs
-                # subsequent HTTP requests to actually restart cgminer.
+            # Try cgminer-only restart first (Vnish firmware — faster, ~30s)
+            try:
+                if await vnish.start_cgminer():
+                    logger.info("Wake via reboot_cgminer sent", ip=miner.ip)
+                    self.register_waking_miner(miner.ip)
+                    return True, "Wake via cgminer restart (takes ~45s)"
+            except Exception:
+                pass  # Expected 404 on stock firmware — fall through
+            
+            # Full system reboot (stock Bitmain firmware)
+            if await vnish.reboot_system():
+                logger.info("Wake via full system reboot sent", ip=miner.ip)
                 self.register_waking_miner(miner.ip)
-                return True, "Wake command sent - miner resuming (takes ~45-60s)"
-            else:
-                logger.warning("Wake from sleep command failed", ip=miner.ip)
-                return False, "Failed to wake from sleep"
+                return True, "Wake via system reboot (takes ~90-150s)"
+            
+            logger.warning("All wake methods failed", ip=miner.ip)
+            return False, "Failed to wake miner"
                 
         except Exception as e:
-            logger.error("Failed to wake from sleep", ip=miner.ip, error=str(e))
+            logger.error("Failed to wake miner", ip=miner.ip, error=str(e))
             return False, f"Failed: {e}"
     
     async def set_miner_frequency(

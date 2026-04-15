@@ -42,7 +42,7 @@ class SectionProcess:
         self,
         section_id: str,
         miner_ips: List[str],
-        per_miner_kw: float = 1.4,
+        per_miner_kw: float = 1.5,
     ):
         self.section_id = section_id
         self._miner_ips = miner_ips
@@ -250,7 +250,7 @@ async def _section_main(
     # Start poll + regulate loops (they use THIS process's event loop)
     await section.start(
         poll_interval=settings.poll_interval_seconds,
-        regulate_interval=15.0,
+        regulate_interval=10.0,
     )
 
     running = True
