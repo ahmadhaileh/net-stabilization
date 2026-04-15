@@ -141,12 +141,21 @@ async def _vnish_request(
 
 async def sleep_miner(ip: str) -> bool:
     """
-    Put a miner to sleep.
+    Put a miner to sleep by stopping bmminer.
 
-    Sends POST /cgi-bin/do_sleep_mode.cgi mode=1.
+    Primary:  GET /cgi-bin/stop_bmminer.cgi  (works on stock Bitmain + Vnish)
+    Fallback: POST /cgi-bin/do_sleep_mode.cgi mode=1  (Vnish only)
+
     Fire-and-forget — returns True if the HTTP request succeeded.
     The miner stops hashing but keeps its web server running.
     """
+    # Primary: stop_bmminer.cgi — works on stock Bitmain firmware
+    ok, resp = await _vnish_request(ip, "/cgi-bin/stop_bmminer.cgi", method="GET")
+    if ok:
+        logger.info("miner_sleep_sent", ip=ip, method="stop_bmminer")
+        return True
+
+    # Fallback: do_sleep_mode.cgi (Vnish firmware)
     ok, _ = await _vnish_request(
         ip,
         "/cgi-bin/do_sleep_mode.cgi",
@@ -154,7 +163,7 @@ async def sleep_miner(ip: str) -> bool:
         data={"mode": "1"},
     )
     if ok:
-        logger.info("miner_sleep_sent", ip=ip)
+        logger.info("miner_sleep_sent", ip=ip, method="do_sleep_mode")
     else:
         logger.warning("miner_sleep_failed", ip=ip)
     return ok
@@ -164,21 +173,34 @@ async def wake_miner(ip: str) -> bool:
     """
     Wake a miner from sleep.
 
-    Sends POST /cgi-bin/do_sleep_mode.cgi mode=0.
-    Fire-and-forget — miner boots CGMiner and starts hashing in ~60s.
+    Primary:  GET /cgi-bin/reboot_cgminer.cgi  (Vnish — fast, ~30s)
+    Fallback: POST /cgi-bin/reboot.cgi         (stock Bitmain — full reboot, ~90s)
+
+    Fire-and-forget — miner boots bmminer and starts hashing in ~60-150s.
     Normal polling will detect it coming online.
     """
+    # Try Vnish cgminer-only restart first (faster, ~30s)
     ok, _ = await _vnish_request(
-        ip,
-        "/cgi-bin/do_sleep_mode.cgi",
-        method="POST",
-        data={"mode": "0"},
+        ip, "/cgi-bin/reboot_cgminer.cgi", method="GET", timeout=8.0
     )
     if ok:
-        logger.info("miner_wake_sent", ip=ip)
-    else:
-        logger.warning("miner_wake_failed", ip=ip)
-    return ok
+        logger.info("miner_wake_sent", ip=ip, method="reboot_cgminer")
+        return True
+
+    # Full system reboot (stock Bitmain firmware — needs POST with body)
+    ok, _ = await _vnish_request(
+        ip,
+        "/cgi-bin/reboot.cgi",
+        method="POST",
+        data={"reboot": "1"},
+        timeout=10.0,
+    )
+    if ok:
+        logger.info("miner_wake_sent", ip=ip, method="reboot")
+        return True
+
+    logger.warning("miner_wake_failed", ip=ip)
+    return False
 
 
 # ── CGMiner TCP API (port 4028) ──────────────────────────────────
