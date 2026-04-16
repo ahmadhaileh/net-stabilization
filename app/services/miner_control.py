@@ -38,6 +38,10 @@ DEFAULT_MINER_POWER_KW = 3.25
 _anthillos_tokens: Dict[str, str] = {}
 # IPs confirmed as AnthillOS (detected during polling/identification)
 _anthillos_ips: set = set()
+# AnthillOS failure recovery tracker: {ip: (last_attempt_time, attempt_count)}
+_anthillos_recovery: Dict[str, Tuple[datetime, int]] = {}
+_RECOVERY_COOLDOWN_S = 300  # 5 min between recovery attempts
+_RECOVERY_MAX_ATTEMPTS = 5  # give up after N consecutive failures
 
 
 class MinerState(str, Enum):
@@ -238,6 +242,36 @@ async def _anthillos_poll(ip: str, timeout: float = 3.0) -> Optional[dict]:
         return None
 
 
+async def _anthillos_auto_recover(ip: str) -> None:
+    """Auto-recover an AnthillOS miner in failure state (e.g. thermal protection).
+
+    Uses a cooldown and max-attempt limit to prevent reboot-loops.
+    """
+    now = datetime.utcnow()
+    last_attempt, attempts = _anthillos_recovery.get(ip, (None, 0))
+
+    if attempts >= _RECOVERY_MAX_ATTEMPTS:
+        return  # Give up — likely a hardware issue
+
+    if last_attempt and (now - last_attempt).total_seconds() < _RECOVERY_COOLDOWN_S:
+        return  # Too soon since last attempt
+
+    _anthillos_recovery[ip] = (now, attempts + 1)
+
+    # Try mining/restart first (lighter than full reboot)
+    ok, _ = await _anthillos_request(ip, "/api/v1/mining/restart", method="POST", timeout=8.0)
+    if ok:
+        logger.info("anthillos_auto_recover", ip=ip, method="restart", attempt=attempts + 1)
+        return
+
+    # Full reboot as fallback
+    ok, _ = await _anthillos_request(ip, "/api/v1/system/reboot", method="POST", timeout=8.0)
+    if ok:
+        logger.info("anthillos_auto_recover", ip=ip, method="reboot", attempt=attempts + 1)
+    else:
+        logger.warning("anthillos_auto_recover_failed", ip=ip, attempt=attempts + 1)
+
+
 async def sleep_miner(ip: str) -> bool:
     """
     Put a miner to sleep by stopping mining.
@@ -410,6 +444,10 @@ async def poll_miner(miner: Miner) -> MinerState:
                 _parse_anthillos_status(miner, anthill)
                 miner.consecutive_failures = 0
                 miner.last_seen = datetime.utcnow()
+                # Auto-recover from firmware failure (e.g. overheat)
+                anthill_state = anthill.get("status", {}).get("miner_state", "")
+                if anthill_state == "failure":
+                    await _anthillos_auto_recover(miner.ip)
                 return miner.state
 
     # Try CGMiner TCP — reliable even when Vnish JSON is broken
@@ -538,10 +576,17 @@ def _parse_anthillos_status(miner: Miner, data: dict):
     miner_state = status.get("miner_state", "")
     if miner_state == "mining":
         miner.state = MinerState.MINING
-    elif miner_state in ("stopped", "sleeping"):
+        # Clear recovery tracker on successful mining
+        _anthillos_recovery.pop(miner.ip, None)
+    elif miner_state in ("stopped", "sleeping", "shutting-down"):
         miner.state = MinerState.SLEEPING
-    elif miner_state == "initializing":
-        miner.state = MinerState.MINING  # Treat as mining (waking up)
+    elif miner_state in ("initializing", "starting", "restarting"):
+        miner.state = MinerState.MINING  # Treat as waking up
+    elif miner_state == "failure":
+        miner.state = MinerState.SLEEPING  # Triggers wake flow
+        desc = status.get("description", "")
+        logger.warning("anthillos_failure", ip=miner.ip, description=desc,
+                       failure_code=status.get("failure_code"))
     else:
         miner.state = MinerState.SLEEPING
 
