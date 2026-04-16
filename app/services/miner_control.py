@@ -289,6 +289,19 @@ async def wake_miner(ip: str) -> bool:
         if ok:
             logger.info("miner_wake_sent", ip=ip, method="anthillos_start")
             return True
+        # mining/start failed (e.g. hung cgminer returns 500) — try restart
+        ok, _ = await _anthillos_request(ip, "/api/v1/mining/restart", method="POST", timeout=8.0)
+        if ok:
+            logger.info("miner_wake_sent", ip=ip, method="anthillos_restart")
+            return True
+        # Last resort — full system reboot clears hung cgminer
+        ok, _ = await _anthillos_request(ip, "/api/v1/system/reboot", method="POST", timeout=8.0)
+        if ok:
+            logger.info("miner_wake_sent", ip=ip, method="anthillos_reboot")
+            return True
+        # AnthillOS miners don't respond to CGI endpoints — skip fallbacks
+        logger.warning("miner_wake_failed", ip=ip, firmware="anthillos")
+        return False
 
     # CGI: Vnish cgminer-only restart (faster, ~30s)
     ok, _ = await _vnish_request(
