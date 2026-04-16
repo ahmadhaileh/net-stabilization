@@ -985,7 +985,7 @@ async def apply_power_allocation(request: PowerAllocationRequest):
     fleet_manager = get_fleet_manager()
     
     # Use the fleet manager's activate method which now supports fractional power
-    success, message = await fleet_manager.activate(request.target_power_kw)
+    success, message = await fleet_manager.activate(request.target_power_kw, source="dashboard")
     
     return {
         "success": success,

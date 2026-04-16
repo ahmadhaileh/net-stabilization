@@ -75,11 +75,12 @@ function setupEventListeners() {
 // =========================================================================
 
 async function startPolling() {
-    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchSections()]);
+    await Promise.all([fetchStatus(), fetchDiscoveredMiners(), fetchHealth(), fetchSections(), fetchHistory()]);
 
     setInterval(fetchStatus, CONFIG.pollInterval);
     setInterval(fetchDiscoveredMiners, CONFIG.pollInterval);
     setInterval(fetchSections, CONFIG.pollInterval);
+    setInterval(fetchHistory, CONFIG.pollInterval);
     setInterval(updateRegulationTimer, 1000);
 }
 

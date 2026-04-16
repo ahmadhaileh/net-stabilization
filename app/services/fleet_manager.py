@@ -1307,18 +1307,19 @@ class FleetManager:
     # Activation / Deactivation
     # =========================================================================
     
-    async def activate(self, target_power_kw: float) -> tuple[bool, str]:
+    async def activate(self, target_power_kw: float, source: str = "ems") -> tuple[bool, str]:
         """
         Activate the fleet at the specified power level.
         
         Args:
             target_power_kw: Target power consumption in kW
+            source: Command source ("ems" or "dashboard")
             
         Returns:
             Tuple of (success, message)
         """
         async with self._lock:
-            logger.info("Activation requested", target_power_kw=target_power_kw)
+            logger.info("Activation requested", target_power_kw=target_power_kw, source=source)
             
             # Clear deactivation flag
             self._deactivation_in_progress = False
@@ -1345,7 +1346,7 @@ class FleetManager:
             self._last_activation_time = datetime.utcnow()
             
             # Log command
-            self._log_command("ems", "activate", {"power_kw": target_power_kw})
+            self._log_command(source, "activate", {"power_kw": target_power_kw})
             
             # If target is 0 or very small, treat as deactivation
             if target_power_kw < self.settings.min_power_threshold_kw:
@@ -1356,15 +1357,18 @@ class FleetManager:
             
             return success, message
     
-    async def deactivate(self) -> tuple[bool, str]:
+    async def deactivate(self, source: str = "ems") -> tuple[bool, str]:
         """
         Deactivate the fleet (stop all mining).
         
+        Args:
+            source: Command source ("ems" or "dashboard")
+            
         Returns:
             Tuple of (success, message)
         """
         async with self._lock:
-            logger.info("Deactivation requested")
+            logger.info("Deactivation requested", source=source)
             
             # IMMEDIATELY set flags to stop all background activation
             # This prevents race conditions with regulation loop
@@ -1374,7 +1378,7 @@ class FleetManager:
             self._status.last_ems_command = datetime.utcnow()
             
             # Log command
-            self._log_command("ems", "deactivate", {})
+            self._log_command(source, "deactivate", {})
             
             result = await self._deactivate_fleet()
             
