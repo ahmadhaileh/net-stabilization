@@ -145,10 +145,10 @@ class FleetManager:
         self._power_control_mode: str = self.db.get_setting("power_control_mode", "on_off")
         
         # Fixed per-miner kW for activation and regulation decisions.
-        # Miner self-reports vary wildly during boot (EMA drifts to 1.5+ kW
-        # when few miners detected but meter shows high power).  Use a fixed
-        # conservative value that matches real S9 consumption.
-        self._actual_per_miner_kw: float = 1.40  # Fixed: don't use EMA (unreliable during boot)
+        # Miner self-reports vary wildly during boot (EMA drifts when
+        # few miners detected but meter shows high power).  Use a fixed
+        # conservative value that matches real S19 95TH consumption.
+        self._actual_per_miner_kw: float = 2.25  # Fixed: S19 95TH at the meter
         self._plant_overhead_kw: float = 6.0     # Non-miner plant consumption (cooling, network, etc.)
         self._meter_calibration_count: int = 0    # How many meter samples we've collected
 
@@ -1028,10 +1028,10 @@ class FleetManager:
                 # cause rated_power to oscillate (e.g. 194→843 kW).
                 # Guard 1: require ≥5 miners running with meaningful power
                 # Guard 2: skip when >10% of fleet is transitioning (meter lag)
-                # Guard 3: clamp measured_per_miner to sane S9 range
+                # Guard 3: clamp measured_per_miner to sane range
                 # Guard 4: clamp final EMA value to sane range
-                _MIN_PER_MINER_KW = 0.8   # S9 minimum (underclocked / low-power)
-                _MAX_PER_MINER_KW = 1.6   # S9 maximum (never exceeds ~1500 W)
+                _MIN_PER_MINER_KW = 1.5   # Minimum (underclocked / low-power)
+                _MAX_PER_MINER_KW = 3.0   # Maximum (S19 never exceeds ~2500 W)
                 transitioning_count = sum(1 for m in miners if m.is_transitioning)
                 transitioning_pct = (transitioning_count / len(miners) * 100) if miners else 0
 

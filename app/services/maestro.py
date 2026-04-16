@@ -39,9 +39,9 @@ from app.models.state import FleetState
 
 logger = structlog.get_logger()
 
-# How many miners per section (~54 kW at 1.5 kW each)
-MINERS_PER_SECTION = 36
-DEFAULT_PER_MINER_KW = 1.5
+# How many miners per section (~56 kW at 2.25 kW each)
+MINERS_PER_SECTION = 25
+DEFAULT_PER_MINER_KW = 2.25
 
 
 class Maestro:
@@ -457,7 +457,7 @@ class Maestro:
         total_sleeping = sum(
             s.get_status().get("sleeping_miners", 0) for s in self.sections
         )
-        idle_baseline_kw = total_sleeping * 0.051  # 51W AC-side per sleeping miner
+        idle_baseline_kw = total_sleeping * 0.025  # ~25W AC-side per sleeping S19 (APW12 PSU)
         meter = max(0.0, raw_meter - idle_baseline_kw)
 
         # Warmup: wait for miners to actually boot (90s+ boot time)

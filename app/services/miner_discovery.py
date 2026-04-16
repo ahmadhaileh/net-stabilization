@@ -107,11 +107,11 @@ class FirmwareType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# ── Per-miner sanity thresholds (Antminer S9) ────────────────────
+# ── Per-miner sanity thresholds ───────────────────────────────────
 # Any value above these is considered a firmware glitch / false report.
 # Clamped at source so all downstream calculations stay realistic.
-_MAX_MINER_POWER_WATTS = 1500.0   # S9 absolute max ~1400 W
-_MAX_MINER_HASHRATE_GHS = 15000.0  # S9 max ~14 TH/s = 14 000 GH/s
+_MAX_MINER_POWER_WATTS = 3500.0   # S19 absolute max ~2500 W (with margin)
+_MAX_MINER_HASHRATE_GHS = 120000.0  # S19 max ~95 TH/s = 95 000 GH/s (with margin)
 
 
 @dataclass
@@ -991,7 +991,7 @@ class MinerDiscoveryService:
         from app.database import get_db_service
         from app.config import get_settings
         self.db = get_db_service()
-        settings = get_settings()
+        self.settings = get_settings()
         
         # Registry of discovered miners
         self._miners: Dict[str, DiscoveredMiner] = {}
@@ -1014,7 +1014,7 @@ class MinerDiscoveryService:
         
         # Snapshot timing - track last snapshot time per miner
         self._last_snapshot_time: Dict[str, datetime] = {}
-        self._snapshot_interval = settings.snapshot_interval_seconds
+        self._snapshot_interval = self.settings.snapshot_interval_seconds
         
         # ── Wake-poke subsystem ──────────────────────────────────────
         # Vnish firmware requires HTTP stimulation after wake command to
@@ -1025,8 +1025,8 @@ class MinerDiscoveryService:
         self._poke_client: Optional[httpx.AsyncClient] = None
         self._poke_interval: float = 3.0   # seconds between poke rounds
         self._poke_give_up_after: float = 600.0  # stop poking after 10 min
-        self._vnish_username: str = settings.vnish_username
-        self._vnish_password: str = settings.vnish_password
+        self._vnish_username: str = self.settings.vnish_username
+        self._vnish_password: str = self.settings.vnish_password
     
     # =========================================================================
     # Wake-Poke Subsystem
@@ -1157,7 +1157,7 @@ class MinerDiscoveryService:
             elif "pro" in model_lower:
                 return 3250.0
             else:
-                return 3050.0
+                return 2250.0  # S19 95TH measured at the meter
         elif "s21" in model_lower:
             return 3500.0
         
@@ -1259,9 +1259,12 @@ class MinerDiscoveryService:
             logger.error("Invalid network CIDR", cidr=cidr, error=str(e))
             return []
         
-        # Generate all IPs to scan
-        hosts = list(network.hosts())
-        logger.info(f"Scanning {len(hosts)} hosts for miners")
+        # Generate all IPs to scan, excluding known non-miner devices
+        exclude_set = set(
+            ip.strip() for ip in self.settings.discovery_exclude_ips.split(",") if ip.strip()
+        )
+        hosts = [ip for ip in network.hosts() if str(ip) not in exclude_set]
+        logger.info(f"Scanning {len(hosts)} hosts for miners (excluded {len(exclude_set)} IPs)")
         
         discovered = []
         semaphore = asyncio.Semaphore(concurrent_scans)

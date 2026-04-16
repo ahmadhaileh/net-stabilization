@@ -413,7 +413,14 @@ async def discover_miners(network_cidr: str, timeout: float = 1.0) -> List[str]:
     network = ipaddress.ip_network(network_cidr, strict=False)
     found: List[str] = []
 
+    # Exclude known non-miner devices (gateway, server, switches)
+    exclude_set = set(
+        ip.strip() for ip in settings.discovery_exclude_ips.split(",") if ip.strip()
+    )
+
     async def _probe(ip_str: str):
+        if ip_str in exclude_set:
+            return
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(ip_str, settings.vnish_port),

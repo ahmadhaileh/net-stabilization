@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     vnish_password: str = "root"  # Vnish Web API password
     vnish_port: int = 80  # Vnish Web API port
     
+    # IPs to exclude from miner discovery (non-miner devices: gateway, server, switches)
+    discovery_exclude_ips: str = "192.168.95.2,192.168.95.6,192.168.95.10,192.168.95.131"
+    
     # Power Meter (BESS EMS measurement device)
     power_meter_enabled: bool = True  # Use physical meter for actual power
     power_meter_host: str = "192.168.95.4"  # Meter IP

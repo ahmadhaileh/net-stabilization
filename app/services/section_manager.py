@@ -32,8 +32,8 @@ from app.services.miner_control import (
 logger = structlog.get_logger()
 
 # Conservative per-miner power for calculations.
-# Real S9 draws ~1.5 kW on Vnish 3.9.0 at the meter.
-DEFAULT_PER_MINER_KW = 1.5
+# S19 95TH draws ~2.25 kW on Vnish at the meter.
+DEFAULT_PER_MINER_KW = 2.25
 # Idle/sleeping miner standby draw (PSU + control board fans).
 IDLE_PER_MINER_KW = 0.03
 

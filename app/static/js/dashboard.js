@@ -10,8 +10,8 @@ const CONFIG = {
     emsBase: '/api',
 };
 
-// S9 rated power constant (API no longer sends per-miner rated power)
-const RATED_POWER_KW = 1.4;
+// S19 95TH rated power constant (API no longer sends per-miner rated power)
+const RATED_POWER_KW = 2.25;
 
 // State
 let state = {
