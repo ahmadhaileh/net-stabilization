@@ -33,15 +33,14 @@ import structlog
 from app.config import get_settings
 from app.services.section_process import SectionProcess
 from app.services.power_meter import PowerMeterService, get_power_meter_service
-from app.services.miner_control import discover_miners
+from app.services.miner_control import discover_miners_with_power
 from app.models.ems import RunningStatus
 from app.models.state import FleetState
 
 logger = structlog.get_logger()
 
-# How many miners per section (~56 kW at 2.25 kW each)
+# How many miners per section
 MINERS_PER_SECTION = 25
-DEFAULT_PER_MINER_KW = 2.25
 
 
 class Maestro:
@@ -53,9 +52,9 @@ class Maestro:
     individual miners, only sends commands to section processes.
     """
 
-    def __init__(self, per_miner_kw: float = DEFAULT_PER_MINER_KW):
+    def __init__(self):
         self.settings = get_settings()
-        self.per_miner_kw = per_miner_kw
+        self.per_miner_kw: float = 0.0  # Computed dynamically from discovery
         self.sections: list[SectionProcess] = []
         self.power_meter: PowerMeterService = get_power_meter_service()
 
@@ -90,26 +89,39 @@ class Maestro:
         """Discover miners and create section processes (not started yet)."""
         logger.info("maestro_initializing", network=self.settings.miner_network_cidr)
 
-        # Discover all miners on the network (one-time, in main process)
-        ips = await discover_miners(
+        # Discover all miners on the network and probe their model/power
+        miner_power = await discover_miners_with_power(
             self.settings.miner_network_cidr,
             timeout=self.settings.miner_scan_timeout,
         )
 
-        if not ips:
+        if not miner_power:
             logger.warning("no_miners_found")
             self._state = FleetState.FAULT
             return
+
+        # Compute fleet-average per_miner_kw from actual discovered values
+        self.per_miner_kw = sum(miner_power.values()) / len(miner_power)
+
+        ips = sorted(miner_power.keys())
+
+        logger.info(
+            "miners_discovered_with_power",
+            total=len(ips),
+            avg_per_miner_kw=round(self.per_miner_kw, 3),
+            models_kw={ip: round(kw, 2) for ip, kw in miner_power.items()},
+        )
 
         # Split into sections of MINERS_PER_SECTION
         self.sections = []
         for i in range(0, len(ips), MINERS_PER_SECTION):
             chunk = ips[i : i + MINERS_PER_SECTION]
+            # Build per-miner power map for this section
+            section_power_map = {ip: miner_power[ip] for ip in chunk}
             section_id = f"section-{len(self.sections) + 1}"
             section = SectionProcess(
                 section_id=section_id,
-                miner_ips=chunk,
-                per_miner_kw=self.per_miner_kw,
+                miner_power_map=section_power_map,
             )
             self.sections.append(section)
 
@@ -451,13 +463,14 @@ class Maestro:
             return
 
         # Subtract idle baseline: the meter reads ALL miner power including
-        # sleeping miners' PSU standby (~51W each AC-side).  The EMS target
-        # is *mining* power only, so we must remove the idle floor before
-        # comparing.
+        # sleeping miners' PSU standby draw.  The EMS target is *mining* power
+        # only, so we must remove the idle floor before comparing.
+        # Idle draw is ~1.1% of rated power (measured across S9/S19 PSUs).
         total_sleeping = sum(
             s.get_status().get("sleeping_miners", 0) for s in self.sections
         )
-        idle_baseline_kw = total_sleeping * 0.025  # ~25W AC-side per sleeping S19 (APW12 PSU)
+        idle_per_miner_kw = self.per_miner_kw * 0.011  # ~1.1% of rated: 25W for 2.25kW, 15W for 1.4kW
+        idle_baseline_kw = total_sleeping * idle_per_miner_kw
         meter = max(0.0, raw_meter - idle_baseline_kw)
 
         # Warmup: wait for miners to actually boot (90s+ boot time)

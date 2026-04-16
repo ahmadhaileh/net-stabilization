@@ -11,7 +11,7 @@ Design:
 - Normal polling detects state changes
 - Simple on/off control (no frequency scaling)
 - Staggered wake with configurable delay between miners
-- Per-miner ~1.4 kW (S9 on Vnish 3.9.0)
+- Per-miner power determined dynamically from model identification
 """
 import asyncio
 from datetime import datetime, timedelta
@@ -31,11 +31,8 @@ from app.services.miner_control import (
 
 logger = structlog.get_logger()
 
-# Conservative per-miner power for calculations.
-# S19 95TH draws ~2.25 kW on Vnish at the meter.
-DEFAULT_PER_MINER_KW = 2.25
-# Idle/sleeping miner standby draw (PSU + control board fans).
-IDLE_PER_MINER_KW = 0.03
+# Idle/sleeping miner standby draw as fraction of rated power (~1.1%).
+IDLE_POWER_FRACTION = 0.011
 
 
 class SectionManager:
@@ -52,17 +49,20 @@ class SectionManager:
     def __init__(
         self,
         section_id: str,
-        miner_ips: List[str],
-        per_miner_kw: float = DEFAULT_PER_MINER_KW,
+        miner_power_map: Dict[str, float],
         wake_delay_seconds: float = 0.5,
     ):
         self.section_id = section_id
-        self.per_miner_kw = per_miner_kw
+        self._miner_power_map = miner_power_map  # {ip: rated_kw}
+        self.per_miner_kw = (
+            sum(miner_power_map.values()) / len(miner_power_map)
+            if miner_power_map else 2.25
+        )
         self.wake_delay_seconds = wake_delay_seconds
 
         # Create Miner objects for each IP
         self.miners: Dict[str, Miner] = {
-            ip: Miner(ip=ip) for ip in miner_ips
+            ip: Miner(ip=ip) for ip in miner_power_map
         }
 
         # Current target (None = standby / sleep all)
@@ -82,16 +82,17 @@ class SectionManager:
         logger.info(
             "section_created",
             section=section_id,
-            miners=len(miner_ips),
-            rated_kw=round(len(miner_ips) * per_miner_kw, 1),
+            miners=len(miner_power_map),
+            rated_kw=round(sum(miner_power_map.values()), 1),
+            avg_per_miner_kw=round(self.per_miner_kw, 3),
         )
 
     # ── Properties ────────────────────────────────────────────────
 
     @property
     def rated_power_kw(self) -> float:
-        """Maximum power this section can deliver."""
-        return len(self.miners) * self.per_miner_kw
+        """Maximum power this section can deliver (sum of individual ratings)."""
+        return sum(self._miner_power_map.values())
 
     @property
     def mining_miners(self) -> List[Miner]:
@@ -116,7 +117,7 @@ class SectionManager:
     def active_power_kw(self) -> float:
         """Current power estimate: mining miners at full draw + sleeping miners at idle draw."""
         mining = len(self.mining_miners) * self.per_miner_kw
-        sleeping = len(self.sleeping_miners) * IDLE_PER_MINER_KW
+        sleeping = len(self.sleeping_miners) * self.per_miner_kw * IDLE_POWER_FRACTION
         return mining + sleeping
 
     @property
@@ -125,7 +126,8 @@ class SectionManager:
         mining = len(self.mining_miners)
         pending = self._count_valid_pending()
         sleeping = len(self.sleeping_miners) - pending
-        return (mining + pending) * self.per_miner_kw + max(0, sleeping) * IDLE_PER_MINER_KW
+        idle_kw = self.per_miner_kw * IDLE_POWER_FRACTION
+        return (mining + pending) * self.per_miner_kw + max(0, sleeping) * idle_kw
 
     @property
     def target_power_kw(self) -> Optional[float]:

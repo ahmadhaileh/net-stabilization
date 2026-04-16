@@ -1143,34 +1143,13 @@ class MinerDiscoveryService:
             await asyncio.sleep(self._poke_interval)
     
     def _estimate_antminer_power(self, model: str) -> float:
-        """Estimate rated power for Antminer models in watts."""
-        model_lower = model.lower()
-        
-        # S-series (SHA-256)
-        if "s9" in model_lower:
-            return 1400.0
-        elif "s17" in model_lower:
-            return 2800.0 if "pro" in model_lower else 2400.0
-        elif "s19" in model_lower:
-            if "xp" in model_lower:
-                return 3250.0
-            elif "pro" in model_lower:
-                return 3250.0
-            else:
-                return 2250.0  # S19 95TH measured at the meter
-        elif "s21" in model_lower:
-            return 3500.0
-        
-        # T-series
-        elif "t9" in model_lower:
-            return 1450.0
-        elif "t17" in model_lower:
-            return 2200.0
-        elif "t19" in model_lower:
-            return 3150.0
-        
-        # Default for unknown models
-        return 3000.0
+        """Estimate rated power for Antminer models in watts.
+
+        Delegates to the shared model→power lookup in miner_control
+        and converts kW → W.
+        """
+        from app.services.miner_control import estimate_miner_power_kw
+        return estimate_miner_power_kw(model) * 1000.0
     
     def _save_miner_to_db(self, miner: DiscoveredMiner):
         """Save or update miner in database."""

@@ -41,26 +41,27 @@ class SectionProcess:
     def __init__(
         self,
         section_id: str,
-        miner_ips: List[str],
-        per_miner_kw: float = 1.5,
+        miner_power_map: Dict[str, float],
     ):
         self.section_id = section_id
-        self._miner_ips = miner_ips
-        self._per_miner_kw = per_miner_kw
+        self._miner_power_map = miner_power_map  # {ip: rated_kw}
+        self._miner_ips = sorted(miner_power_map.keys())
 
         self._cmd_queue: mp.Queue = mp.Queue()
         self._status_queue: mp.Queue = mp.Queue()
         self._process: Optional[mp.Process] = None
 
+        rated_kw = sum(miner_power_map.values())
+
         # Cached status (updated by draining status_queue)
         self._cached_status: Dict[str, Any] = {
             "section_id": section_id,
-            "total_miners": len(miner_ips),
+            "total_miners": len(self._miner_ips),
             "online_miners": 0,
             "mining_miners": 0,
             "sleeping_miners": 0,
             "pending_wakes": 0,
-            "rated_power_kw": round(len(miner_ips) * per_miner_kw, 1),
+            "rated_power_kw": round(rated_kw, 1),
             "active_power_kw": 0.0,
             "expected_power_kw": 0.0,
             "target_power_kw": None,
@@ -76,8 +77,7 @@ class SectionProcess:
             target=_section_worker,
             args=(
                 self.section_id,
-                self._miner_ips,
-                self._per_miner_kw,
+                self._miner_power_map,
                 self._cmd_queue,
                 self._status_queue,
             ),
@@ -148,7 +148,7 @@ class SectionProcess:
 
     @property
     def rated_power_kw(self) -> float:
-        return len(self._miner_ips) * self._per_miner_kw
+        return sum(self._miner_power_map.values())
 
     @property
     def target_power_kw(self) -> Optional[float]:
@@ -166,8 +166,7 @@ class SectionProcess:
 
 def _section_worker(
     section_id: str,
-    miner_ips: List[str],
-    per_miner_kw: float,
+    miner_power_map: Dict[str, float],
     cmd_queue: mp.Queue,
     status_queue: mp.Queue,
 ):
@@ -185,10 +184,10 @@ def _section_worker(
             "section_process_starting",
             section=section_id,
             pid=mp.current_process().pid,
-            miners=len(miner_ips),
+            miners=len(miner_power_map),
         )
         asyncio.run(
-            _section_main(section_id, miner_ips, per_miner_kw, cmd_queue, status_queue)
+            _section_main(section_id, miner_power_map, cmd_queue, status_queue)
         )
     except KeyboardInterrupt:
         pass
@@ -219,8 +218,7 @@ def _configure_subprocess_logging(section_id: str):
 
 async def _section_main(
     section_id: str,
-    miner_ips: List[str],
-    per_miner_kw: float,
+    miner_power_map: Dict[str, float],
     cmd_queue: mp.Queue,
     status_queue: mp.Queue,
 ):
@@ -243,8 +241,7 @@ async def _section_main(
     # Create the SectionManager — entirely local to this process
     section = SectionManager(
         section_id=section_id,
-        miner_ips=miner_ips,
-        per_miner_kw=per_miner_kw,
+        miner_power_map=miner_power_map,
     )
 
     # Start poll + regulate loops (they use THIS process's event loop)

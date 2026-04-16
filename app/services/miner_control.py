@@ -27,9 +27,12 @@ from app.config import get_settings
 
 logger = structlog.get_logger()
 
-# ── Antminer S9 limits ───────────────────────────────────────────
-MAX_POWER_WATTS = 1500.0
-MAX_HASHRATE_GHS = 15000.0
+# ── Sanity limits ─────────────────────────────────────────────────
+MAX_POWER_WATTS = 3500.0
+MAX_HASHRATE_GHS = 120000.0
+
+# Fallback when a miner's model can't be identified
+DEFAULT_MINER_POWER_KW = 2.25
 
 
 class MinerState(str, Enum):
@@ -443,12 +446,88 @@ async def discover_miners(network_cidr: str, timeout: float = 1.0) -> List[str]:
 async def identify_miner(miner: Miner) -> bool:
     """
     Fill in identity fields (model, firmware, mac) from Vnish system info.
+    Tries CGI endpoint first (S9), then REST API (S19+).
     Returns True if successful.
     """
+    # Try CGI endpoint (S9 Vnish / stock Bitmain)
     ok, info = await _vnish_request(miner.ip, "/cgi-bin/get_system_info.cgi", timeout=3.0)
     if ok and isinstance(info, dict):
         miner.model = info.get("minertype", "")
         miner.firmware = info.get("file_system_version", "")
         miner.mac_address = info.get("macaddr", "")
         return True
+
+    # Try REST API (S19+ Vnish)
+    ok, info = await _vnish_request(miner.ip, "/api/v1/info", timeout=3.0)
+    if ok and isinstance(info, dict):
+        miner.model = info.get("model", "") or info.get("minertype", "")
+        miner.firmware = info.get("firmware", "") or info.get("fw_version", "")
+        miner.mac_address = info.get("mac", "") or info.get("macaddr", "")
+        return True
+
     return False
+
+
+def estimate_miner_power_kw(model: str) -> float:
+    """
+    Estimate rated power (kW) from a miner model string.
+
+    This is the single source of truth for model→power mapping.
+    Used by discovery, Maestro, and section managers to compute
+    dynamic per-miner power instead of hardcoded fleet-wide constants.
+    """
+    m = model.lower()
+
+    # S-series (SHA-256)
+    if "s9" in m:
+        return 1.4
+    if "s17" in m:
+        return 2.8 if "pro" in m else 2.4
+    if "s19" in m:
+        if "xp" in m:
+            return 3.25
+        if "pro" in m:
+            return 3.25
+        return 2.25   # S19 95TH measured at the meter
+    if "s21" in m:
+        return 3.5
+
+    # T-series
+    if "t9" in m:
+        return 1.45
+    if "t17" in m:
+        return 2.2
+    if "t19" in m:
+        return 3.15
+
+    # Whatsminers
+    if "whatsminer" in m:
+        return 3.4
+
+    # Default for unknown
+    return DEFAULT_MINER_POWER_KW
+
+
+async def discover_miners_with_power(
+    network_cidr: str, timeout: float = 1.0,
+) -> Dict[str, float]:
+    """
+    Discover miners and probe each for model to determine rated power.
+
+    Returns dict of {ip: rated_power_kw}.
+    This replaces the old discover_miners() for callers that need power info.
+    """
+    ips = await discover_miners(network_cidr, timeout)
+
+    # Probe all miners concurrently for model identification
+    async def _probe_power(ip: str) -> Tuple[str, float]:
+        miner = Miner(ip=ip)
+        if await identify_miner(miner):
+            kw = estimate_miner_power_kw(miner.model)
+            logger.info("miner_identified", ip=ip, model=miner.model, rated_kw=kw)
+            return ip, kw
+        logger.info("miner_unidentified", ip=ip, rated_kw=DEFAULT_MINER_POWER_KW)
+        return ip, DEFAULT_MINER_POWER_KW
+
+    results = await asyncio.gather(*[_probe_power(ip) for ip in ips])
+    return dict(results)

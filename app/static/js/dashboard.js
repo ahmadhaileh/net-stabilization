@@ -10,8 +10,9 @@ const CONFIG = {
     emsBase: '/api',
 };
 
-// S19 95TH rated power constant (API no longer sends per-miner rated power)
-const RATED_POWER_KW = 2.25;
+// Per-miner rated power — computed dynamically from fleet status.
+// Initialized to a sensible default, updated on first status poll.
+let RATED_POWER_KW = 2.25;
 
 // State
 let state = {
@@ -272,6 +273,10 @@ function updateStatusDisplay() {
 
     // Power
     state.ratedPower = state.status.rated_power_kw;
+    // Dynamically compute per-miner rated power from fleet totals
+    if (state.status.total_miners > 0 && state.status.rated_power_kw > 0) {
+        RATED_POWER_KW = state.status.rated_power_kw / state.status.total_miners;
+    }
     $('active-power').textContent = state.status.active_power_kw.toFixed(1);
     $('rated-power').textContent = state.status.rated_power_kw.toFixed(1);
     $('total-power').textContent = state.status.active_power_kw.toFixed(1) + ' kW';

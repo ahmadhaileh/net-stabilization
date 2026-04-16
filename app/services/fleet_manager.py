@@ -144,11 +144,10 @@ class FleetManager:
         # "on_off" = simple on/off per miner
         self._power_control_mode: str = self.db.get_setting("power_control_mode", "on_off")
         
-        # Fixed per-miner kW for activation and regulation decisions.
-        # Miner self-reports vary wildly during boot (EMA drifts when
-        # few miners detected but meter shows high power).  Use a fixed
-        # conservative value that matches real S19 95TH consumption.
-        self._actual_per_miner_kw: float = 2.25  # Fixed: S19 95TH at the meter
+        # Per-miner kW for activation and regulation decisions.
+        # Computed dynamically from discovered miners; falls back to 2.25 kW
+        # (S19 95TH) until discovery data is available.
+        self._actual_per_miner_kw: float = 2.25  # Updated from discovery
         self._plant_overhead_kw: float = 6.0     # Non-miner plant consumption (cooling, network, etc.)
         self._meter_calibration_count: int = 0    # How many meter samples we've collected
 
@@ -932,6 +931,18 @@ class FleetManager:
         
         miners = await self.discovery.discover_miners()
         logger.info(f"Discovery found {len(miners)} miners")
+
+        # Update per-miner kW from actual discovered rated power
+        rated_miners = [m for m in miners if m.rated_power_watts > 0]
+        if rated_miners:
+            avg_kw = sum(m.rated_power_kw for m in rated_miners) / len(rated_miners)
+            self._actual_per_miner_kw = avg_kw
+            logger.info(
+                "Dynamic per-miner kW updated from discovery",
+                avg_kw=round(avg_kw, 3),
+                miners_sampled=len(rated_miners),
+            )
+
         return len(miners)
     
     async def update_status(self) -> FleetStatus:
