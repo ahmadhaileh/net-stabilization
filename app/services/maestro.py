@@ -73,6 +73,10 @@ class Maestro:
         self._last_plant_kw: Optional[float] = None
         self._last_voltage: Optional[float] = None
 
+        # Background tasks (continued)
+        self._rediscovery_task: Optional[asyncio.Task] = None
+        self._known_ips: set[str] = set()  # IPs already assigned to sections
+
         # Closed-loop meter feedback — corrects for per_miner_kw inaccuracy.
         # When the meter shows less power than the target, we increase section
         # targets proportionally so they wake more miners.
@@ -102,6 +106,9 @@ class Maestro:
 
         # Compute fleet-average per_miner_kw from actual discovered values
         self.per_miner_kw = sum(miner_power.values()) / len(miner_power)
+
+        # Track all managed IPs
+        self._known_ips = set(miner_power.keys())
 
         ips = sorted(miner_power.keys())
 
@@ -164,6 +171,11 @@ class Maestro:
             self._snapshot_loop(), name="maestro-snapshots"
         )
 
+        # Start periodic re-discovery (picks up new miners added to the network)
+        self._rediscovery_task = asyncio.create_task(
+            self._rediscovery_loop(), name="maestro-rediscovery"
+        )
+
         logger.info("maestro_started", sections=len(self.sections))
 
     async def stop(self):
@@ -171,7 +183,7 @@ class Maestro:
         for section in self.sections:
             section.stop()
 
-        for task in (self._meter_task, self._snapshot_task):
+        for task in (self._meter_task, self._snapshot_task, self._rediscovery_task):
             if task and not task.done():
                 task.cancel()
                 try:
@@ -565,6 +577,97 @@ class Maestro:
                 if new_st < 1.0:
                     new_st = 0.0
                 section.set_target(new_st)
+
+    # ── Periodic Re-Discovery ────────────────────────────────────
+
+    async def _rediscovery_loop(self):
+        """Periodically scan the network for new miners and add them to sections."""
+        interval = 60  # Re-scan every 60 seconds
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await self._rediscover_miners()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("rediscovery_error", error=str(e))
+
+    async def _rediscover_miners(self):
+        """Discover new miners and create sections for them."""
+        miner_power = await discover_miners_with_power(
+            self.settings.miner_network_cidr,
+            timeout=self.settings.miner_scan_timeout,
+        )
+        if not miner_power:
+            return
+
+        # Find miners not yet assigned to any section
+        new_miners = {
+            ip: kw for ip, kw in miner_power.items()
+            if ip not in self._known_ips
+        }
+
+        if not new_miners:
+            return
+
+        logger.info(
+            "new_miners_discovered",
+            count=len(new_miners),
+            ips=sorted(new_miners.keys()),
+        )
+
+        # Create new sections for the new miners
+        new_ips = sorted(new_miners.keys())
+        new_sections: list[SectionProcess] = []
+
+        for i in range(0, len(new_ips), MINERS_PER_SECTION):
+            chunk = new_ips[i : i + MINERS_PER_SECTION]
+            section_power_map = {ip: new_miners[ip] for ip in chunk}
+            section_id = f"section-{len(self.sections) + len(new_sections) + 1}"
+            section = SectionProcess(
+                section_id=section_id,
+                miner_power_map=section_power_map,
+            )
+            new_sections.append(section)
+
+        # Start the new section processes
+        for section in new_sections:
+            section.start()
+            logger.info(
+                "section_process_launched",
+                section=section.section_id,
+                miners=len(section._miner_ips),
+            )
+
+        # Give them a moment to initialize, then sleep all new miners
+        await asyncio.sleep(1.0)
+        for section in new_sections:
+            section.do_initial_sleep()
+
+        # Register them
+        async with self._lock:
+            self.sections.extend(new_sections)
+            self._known_ips.update(new_miners.keys())
+
+            # Recompute fleet-average per_miner_kw from all known miners
+            all_power = {ip: miner_power[ip] for ip in self._known_ips if ip in miner_power}
+            if all_power:
+                self.per_miner_kw = sum(all_power.values()) / len(all_power)
+
+        logger.info(
+            "sections_expanded",
+            new_sections=len(new_sections),
+            new_miners=len(new_miners),
+            total_sections=len(self.sections),
+            total_miners=sum(len(s._miner_ips) for s in self.sections),
+            rated_kw=round(self.rated_power_kw, 1),
+            avg_per_miner_kw=round(self.per_miner_kw, 3),
+        )
+
+        # If we're currently running (active EMS target), distribute power
+        # to the new sections too
+        if self._state == FleetState.RUNNING and self._target_power_kw:
+            self._distribute_retarget(self._target_power_kw, self._target_power_kw)
 
     # ── Snapshot Recording ────────────────────────────────────────
 
