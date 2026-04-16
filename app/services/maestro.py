@@ -468,10 +468,10 @@ class Maestro:
                     else:
                         self._consecutive_voltage_zero = 0
 
-                    # Closed-loop feedback: adjust section targets when meter
-                    # shows we're not hitting the EMS target.
-                    elif self._state == FleetState.RUNNING and self._target_power_kw:
-                        self._apply_meter_feedback()
+                        # Closed-loop feedback: adjust section targets when meter
+                        # shows we're not hitting the EMS target.
+                        if self._state == FleetState.RUNNING and self._target_power_kw:
+                            self._apply_meter_feedback()
             except Exception as e:
                 logger.warning("meter_error", error=str(e))
             await asyncio.sleep(5)
