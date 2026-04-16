@@ -32,7 +32,7 @@ MAX_POWER_WATTS = 3500.0
 MAX_HASHRATE_GHS = 120000.0
 
 # Fallback when a miner's model can't be identified
-DEFAULT_MINER_POWER_KW = 2.25
+DEFAULT_MINER_POWER_KW = 3.25
 
 
 class MinerState(str, Enum):
@@ -488,7 +488,7 @@ def estimate_miner_power_kw(model: str) -> float:
             return 3.25
         if "pro" in m:
             return 3.25
-        return 2.25   # S19 95TH measured at the meter
+        return 3.25   # S19 95TH rated 3250 W
     if "s21" in m:
         return 3.5
 

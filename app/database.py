@@ -41,7 +41,7 @@ class MinerRecord(Base):
     firmware_version = Column(String(20), nullable=True)
     mac_address = Column(String(17), nullable=True)
     serial_number = Column(String(50), nullable=True)
-    rated_power_watts = Column(Integer, default=2250)
+    rated_power_watts = Column(Integer, default=3250)
     pool_url = Column(String(255), nullable=True)
     pool_worker = Column(String(100), nullable=True)
     pool_password = Column(String(100), nullable=True)

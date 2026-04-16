@@ -145,9 +145,9 @@ class FleetManager:
         self._power_control_mode: str = self.db.get_setting("power_control_mode", "on_off")
         
         # Per-miner kW for activation and regulation decisions.
-        # Computed dynamically from discovered miners; falls back to 2.25 kW
+        # Computed dynamically from discovered miners; falls back to 3.25 kW
         # (S19 95TH) until discovery data is available.
-        self._actual_per_miner_kw: float = 2.25  # Updated from discovery
+        self._actual_per_miner_kw: float = 3.25  # Updated from discovery
         self._plant_overhead_kw: float = 6.0     # Non-miner plant consumption (cooling, network, etc.)
         self._meter_calibration_count: int = 0    # How many meter samples we've collected
 
@@ -1042,7 +1042,7 @@ class FleetManager:
                 # Guard 3: clamp measured_per_miner to sane range
                 # Guard 4: clamp final EMA value to sane range
                 _MIN_PER_MINER_KW = 1.5   # Minimum (underclocked / low-power)
-                _MAX_PER_MINER_KW = 3.0   # Maximum (S19 never exceeds ~2500 W)
+                _MAX_PER_MINER_KW = 4.0   # Maximum (S19 95TH rated 3250 W)
                 transitioning_count = sum(1 for m in miners if m.is_transitioning)
                 transitioning_pct = (transitioning_count / len(miners) * 100) if miners else 0
 

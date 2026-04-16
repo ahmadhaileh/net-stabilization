@@ -12,7 +12,7 @@ const CONFIG = {
 
 // Per-miner rated power — computed dynamically from fleet status.
 // Initialized to a sensible default, updated on first status poll.
-let RATED_POWER_KW = 2.25;
+let RATED_POWER_KW = 3.25;
 
 // State
 let state = {
