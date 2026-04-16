@@ -36,6 +36,8 @@ DEFAULT_MINER_POWER_KW = 3.25
 
 # AnthillOS (Vnish 1.2.7+) token cache: {ip: token_str}
 _anthillos_tokens: Dict[str, str] = {}
+# IPs confirmed as AnthillOS (detected during polling/identification)
+_anthillos_ips: set = set()
 
 
 class MinerState(str, Enum):
@@ -243,11 +245,12 @@ async def sleep_miner(ip: str) -> bool:
     2. Try CGI stop_bmminer.cgi (stock Bitmain + old Vnish)
     3. Try CGI do_sleep_mode.cgi (Vnish fallback)
     """
-    # AnthillOS REST API (S19+ with Vnish 1.2.7+)
-    ok, _ = await _anthillos_request(ip, "/api/v1/mining/stop", method="POST", timeout=5.0)
-    if ok:
-        logger.info("miner_sleep_sent", ip=ip, method="anthillos_stop")
-        return True
+    # AnthillOS REST API (S19+ with Vnish 1.2.7+) — only for known AnthillOS miners
+    if ip in _anthillos_ips:
+        ok, _ = await _anthillos_request(ip, "/api/v1/mining/stop", method="POST", timeout=5.0)
+        if ok:
+            logger.info("miner_sleep_sent", ip=ip, method="anthillos_stop")
+            return True
 
     # CGI: stop_bmminer.cgi — works on stock Bitmain + old Vnish
     ok, resp = await _vnish_request(ip, "/cgi-bin/stop_bmminer.cgi", method="GET")
@@ -278,11 +281,12 @@ async def wake_miner(ip: str) -> bool:
     2. Try CGI reboot_cgminer.cgi (old Vnish — fast, ~30s)
     3. Try CGI reboot.cgi (stock Bitmain — full reboot, ~90s)
     """
-    # AnthillOS REST API (S19+ with Vnish 1.2.7+)
-    ok, _ = await _anthillos_request(ip, "/api/v1/mining/start", method="POST", timeout=8.0)
-    if ok:
-        logger.info("miner_wake_sent", ip=ip, method="anthillos_start")
-        return True
+    # AnthillOS REST API (S19+ with Vnish 1.2.7+) — only for known AnthillOS miners
+    if ip in _anthillos_ips:
+        ok, _ = await _anthillos_request(ip, "/api/v1/mining/start", method="POST", timeout=8.0)
+        if ok:
+            logger.info("miner_wake_sent", ip=ip, method="anthillos_start")
+            return True
 
     # CGI: Vnish cgminer-only restart (faster, ~30s)
     ok, _ = await _vnish_request(
@@ -381,13 +385,15 @@ async def poll_miner(miner: Miner) -> MinerState:
             else:
                 miner.state = MinerState.SLEEPING
             return miner.state
-        # Non-dict response (HTML) — likely AnthillOS. Try REST API.
-        anthill = await _anthillos_poll(miner.ip, timeout=3.0)
-        if anthill:
-            _parse_anthillos_status(miner, anthill)
-            miner.consecutive_failures = 0
-            miner.last_seen = datetime.utcnow()
-            return miner.state
+        # Non-dict response — check if HTML (AnthillOS SPA) vs broken JSON (S9)
+        if isinstance(status_data, str) and "<html" in status_data.lower():
+            _anthillos_ips.add(miner.ip)
+            anthill = await _anthillos_poll(miner.ip, timeout=3.0)
+            if anthill:
+                _parse_anthillos_status(miner, anthill)
+                miner.consecutive_failures = 0
+                miner.last_seen = datetime.utcnow()
+                return miner.state
 
     # Try CGMiner TCP — reliable even when Vnish JSON is broken
     summary = await cgminer_command(miner.ip, "summary", timeout=3.0)
@@ -605,6 +611,7 @@ async def identify_miner(miner: Miner) -> bool:
         miner.model = info.get("model", "") or info.get("minertype", "")
         miner.firmware = info.get("firmware", "") or info.get("fw_version", "")
         miner.mac_address = info.get("mac", "") or info.get("macaddr", "")
+        _anthillos_ips.add(miner.ip)
         return True
 
     return False
