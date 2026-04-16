@@ -73,6 +73,11 @@ class Maestro:
         self._last_plant_kw: Optional[float] = None
         self._last_voltage: Optional[float] = None
 
+        # Power loss debounce: require multiple consecutive voltage=0 readings
+        # to avoid false deactivation from transient meter glitches.
+        self._consecutive_voltage_zero: int = 0
+        self._voltage_zero_threshold: int = 3  # 3 × 5s = 15s sustained
+
         # Background tasks (continued)
         self._rediscovery_task: Optional[asyncio.Task] = None
         self._known_ips: set[str] = set()  # IPs already assigned to sections
@@ -214,9 +219,9 @@ class Maestro:
             if target_power_kw > rated * 1.05:
                 return False, f"Requested {target_power_kw:.1f} kW exceeds rated {rated:.1f} kW"
 
-            # Check for power loss
-            if self._last_voltage is not None and self._last_voltage == 0:
-                return False, "Power loss detected (voltage=0), cannot activate"
+            # Check for sustained power loss (debounced)
+            if self._consecutive_voltage_zero >= self._voltage_zero_threshold:
+                return False, "Power loss detected (sustained voltage=0), cannot activate"
 
             clamped = min(target_power_kw, rated)
             old_target = self._target_power_kw
@@ -445,10 +450,23 @@ class Maestro:
                     self._last_voltage = reading.voltage
 
                     # Power loss detection: voltage=0 → emergency deactivate
-                    if reading.voltage == 0 and self._state == FleetState.RUNNING:
-                        logger.error("power_loss_detected", voltage=0)
-                        async with self._lock:
-                            await self._do_deactivate()
+                    # Debounced: require multiple consecutive readings to avoid
+                    # false positives from transient meter communication errors.
+                    if reading.voltage == 0:
+                        self._consecutive_voltage_zero += 1
+                        if (
+                            self._consecutive_voltage_zero >= self._voltage_zero_threshold
+                            and self._state == FleetState.RUNNING
+                        ):
+                            logger.error(
+                                "power_loss_detected",
+                                voltage=0,
+                                consecutive=self._consecutive_voltage_zero,
+                            )
+                            async with self._lock:
+                                await self._do_deactivate()
+                    else:
+                        self._consecutive_voltage_zero = 0
 
                     # Closed-loop feedback: adjust section targets when meter
                     # shows we're not hitting the EMS target.
