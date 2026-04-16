@@ -34,6 +34,9 @@ MAX_HASHRATE_GHS = 120000.0
 # Fallback when a miner's model can't be identified
 DEFAULT_MINER_POWER_KW = 3.25
 
+# AnthillOS (Vnish 1.2.7+) token cache: {ip: token_str}
+_anthillos_tokens: Dict[str, str] = {}
+
 
 class MinerState(str, Enum):
     """Observable miner states."""
@@ -142,23 +145,117 @@ async def _vnish_request(
         return False, None
 
 
+# ── AnthillOS REST API (S19+ with Vnish 1.2.7+) ─────────────────
+
+async def _anthillos_get_token(ip: str, timeout: float = 5.0) -> Optional[str]:
+    """Acquire a Bearer token from AnthillOS via POST /api/v1/unlock."""
+    cached = _anthillos_tokens.get(ip)
+    if cached:
+        return cached
+
+    settings = get_settings()
+    url = f"http://{ip}:{settings.vnish_port}/api/v1/unlock"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json={"pw": "admin"})
+            if resp.status_code == 200:
+                data = resp.json()
+                token = data.get("token")
+                if token:
+                    _anthillos_tokens[ip] = token
+                    return token
+    except Exception as e:
+        logger.debug("anthillos_unlock_failed", ip=ip, error=str(e))
+    return None
+
+
+async def _anthillos_request(
+    ip: str,
+    endpoint: str,
+    method: str = "GET",
+    timeout: float = 5.0,
+) -> Tuple[bool, Any]:
+    """Make an authenticated request to an AnthillOS REST API endpoint."""
+    token = await _anthillos_get_token(ip, timeout=timeout)
+    if not token:
+        return False, None
+
+    settings = get_settings()
+    url = f"http://{ip}:{settings.vnish_port}{endpoint}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if method == "GET":
+                resp = await client.get(url, headers=headers)
+            else:
+                resp = await client.post(url, headers=headers)
+            if resp.status_code == 200:
+                try:
+                    return True, resp.json()
+                except Exception:
+                    return True, resp.text
+            # Token expired — clear cache and retry once
+            if resp.status_code in (401, 403):
+                _anthillos_tokens.pop(ip, None)
+                token = await _anthillos_get_token(ip, timeout=timeout)
+                if not token:
+                    return False, None
+                headers = {"Authorization": f"Bearer {token}"}
+                if method == "GET":
+                    resp = await client.get(url, headers=headers)
+                else:
+                    resp = await client.post(url, headers=headers)
+                if resp.status_code == 200:
+                    try:
+                        return True, resp.json()
+                    except Exception:
+                        return True, resp.text
+            return False, None
+    except Exception as e:
+        logger.debug("anthillos_request_failed", ip=ip, endpoint=endpoint, error=str(e))
+        return False, None
+
+
+async def _anthillos_poll(ip: str, timeout: float = 3.0) -> Optional[dict]:
+    """Poll AnthillOS status + summary (no auth needed for reads)."""
+    settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"http://{ip}:{settings.vnish_port}/api/v1/status")
+            if resp.status_code != 200:
+                return None
+            status = resp.json()
+
+            resp2 = await client.get(f"http://{ip}:{settings.vnish_port}/api/v1/summary")
+            summary = resp2.json() if resp2.status_code == 200 else {}
+
+            return {"status": status, "summary": summary}
+    except Exception:
+        return None
+
+
 async def sleep_miner(ip: str) -> bool:
     """
-    Put a miner to sleep by stopping bmminer.
+    Put a miner to sleep by stopping mining.
 
-    Primary:  GET /cgi-bin/stop_bmminer.cgi  (works on stock Bitmain + Vnish)
-    Fallback: POST /cgi-bin/do_sleep_mode.cgi mode=1  (Vnish only)
-
-    Fire-and-forget — returns True if the HTTP request succeeded.
-    The miner stops hashing but keeps its web server running.
+    Strategy:
+    1. Try AnthillOS REST API (S19+): POST /api/v1/mining/stop
+    2. Try CGI stop_bmminer.cgi (stock Bitmain + old Vnish)
+    3. Try CGI do_sleep_mode.cgi (Vnish fallback)
     """
-    # Primary: stop_bmminer.cgi — works on stock Bitmain firmware
-    ok, resp = await _vnish_request(ip, "/cgi-bin/stop_bmminer.cgi", method="GET")
+    # AnthillOS REST API (S19+ with Vnish 1.2.7+)
+    ok, _ = await _anthillos_request(ip, "/api/v1/mining/stop", method="POST", timeout=5.0)
     if ok:
+        logger.info("miner_sleep_sent", ip=ip, method="anthillos_stop")
+        return True
+
+    # CGI: stop_bmminer.cgi — works on stock Bitmain + old Vnish
+    ok, resp = await _vnish_request(ip, "/cgi-bin/stop_bmminer.cgi", method="GET")
+    if ok and isinstance(resp, dict):
         logger.info("miner_sleep_sent", ip=ip, method="stop_bmminer")
         return True
 
-    # Fallback: do_sleep_mode.cgi (Vnish firmware)
+    # CGI fallback: do_sleep_mode.cgi (Vnish firmware)
     ok, _ = await _vnish_request(
         ip,
         "/cgi-bin/do_sleep_mode.cgi",
@@ -176,13 +273,18 @@ async def wake_miner(ip: str) -> bool:
     """
     Wake a miner from sleep.
 
-    Primary:  GET /cgi-bin/reboot_cgminer.cgi  (Vnish — fast, ~30s)
-    Fallback: POST /cgi-bin/reboot.cgi         (stock Bitmain — full reboot, ~90s)
-
-    Fire-and-forget — miner boots bmminer and starts hashing in ~60-150s.
-    Normal polling will detect it coming online.
+    Strategy:
+    1. Try AnthillOS REST API (S19+): POST /api/v1/mining/start
+    2. Try CGI reboot_cgminer.cgi (old Vnish — fast, ~30s)
+    3. Try CGI reboot.cgi (stock Bitmain — full reboot, ~90s)
     """
-    # Try Vnish cgminer-only restart first (faster, ~30s)
+    # AnthillOS REST API (S19+ with Vnish 1.2.7+)
+    ok, _ = await _anthillos_request(ip, "/api/v1/mining/start", method="POST", timeout=8.0)
+    if ok:
+        logger.info("miner_wake_sent", ip=ip, method="anthillos_start")
+        return True
+
+    # CGI: Vnish cgminer-only restart (faster, ~30s)
     ok, _ = await _vnish_request(
         ip, "/cgi-bin/reboot_cgminer.cgi", method="GET", timeout=8.0
     )
@@ -190,7 +292,7 @@ async def wake_miner(ip: str) -> bool:
         logger.info("miner_wake_sent", ip=ip, method="reboot_cgminer")
         return True
 
-    # Full system reboot (stock Bitmain firmware — needs POST with body)
+    # CGI: Full system reboot (stock Bitmain firmware)
     ok, _ = await _vnish_request(
         ip,
         "/cgi-bin/reboot.cgi",
@@ -279,9 +381,13 @@ async def poll_miner(miner: Miner) -> MinerState:
             else:
                 miner.state = MinerState.SLEEPING
             return miner.state
-        # Malformed JSON (string response) — Vnish returns broken JSON
-        # even while actively mining. Don't assume sleeping; fall through
-        # to CGMiner TCP which returns clean data.
+        # Non-dict response (HTML) — likely AnthillOS. Try REST API.
+        anthill = await _anthillos_poll(miner.ip, timeout=3.0)
+        if anthill:
+            _parse_anthillos_status(miner, anthill)
+            miner.consecutive_failures = 0
+            miner.last_seen = datetime.utcnow()
+            return miner.state
 
     # Try CGMiner TCP — reliable even when Vnish JSON is broken
     summary = await cgminer_command(miner.ip, "summary", timeout=3.0)
@@ -398,6 +504,42 @@ def _parse_vnish_status(miner: Miner, data: Any):
 
     except (ValueError, TypeError):
         pass
+
+
+def _parse_anthillos_status(miner: Miner, data: dict):
+    """Extract stats from AnthillOS /api/v1/status + /api/v1/summary."""
+    status = data.get("status", {})
+    summary = data.get("summary", {})
+
+    # State from /api/v1/status
+    miner_state = status.get("miner_state", "")
+    if miner_state == "mining":
+        miner.state = MinerState.MINING
+    elif miner_state in ("stopped", "sleeping"):
+        miner.state = MinerState.SLEEPING
+    elif miner_state == "initializing":
+        miner.state = MinerState.MINING  # Treat as mining (waking up)
+    else:
+        miner.state = MinerState.SLEEPING
+
+    # Stats from /api/v1/summary → nested under "miner" key
+    miner_data = summary.get("miner", summary)
+    if isinstance(miner_data, dict):
+        # Hashrate (GH/s)
+        raw_ghs = float(miner_data.get("instant_hashrate", 0) or 0)
+        miner.hashrate_ghs = min(raw_ghs, MAX_HASHRATE_GHS)
+
+        # Power (watts)
+        raw_watts = float(miner_data.get("power_consumption", 0) or 0)
+        if raw_watts > 0:
+            miner.power_watts = min(raw_watts, MAX_POWER_WATTS)
+
+        # Temperature — chip_temp.max
+        chip_temp = miner_data.get("chip_temp", {})
+        if isinstance(chip_temp, dict):
+            t = float(chip_temp.get("max", 0) or 0)
+            if t > 0:
+                miner.temperature_c = t
 
 
 # ── Discovery ─────────────────────────────────────────────────────

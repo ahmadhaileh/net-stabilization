@@ -104,14 +104,19 @@ class SectionManager:
 
     @property
     def available_miners(self) -> List[Miner]:
-        """Miners that could be woken (sleeping + not transitioning + not already pending)."""
-        return [
+        """Miners that could be woken (sleeping + not transitioning + not already pending).
+        Sorted by rated power descending — high-power miners (S19) wake first."""
+        candidates = [
             m for m in self.miners.values()
             if m.state == MinerState.SLEEPING
             and not m.is_wake_backed_off
             and not m.is_transitioning
             and m.ip not in self._pending_wakes
         ]
+        candidates.sort(
+            key=lambda m: self._miner_power_map.get(m.ip, 0), reverse=True
+        )
+        return candidates
 
     @property
     def active_power_kw(self) -> float:
@@ -348,8 +353,11 @@ class SectionManager:
         if trimmed >= count:
             return
 
-        # Then: sleep actual mining miners (sorted by IP, trim from end)
-        mining = sorted(self.mining_miners, key=lambda m: m.ip, reverse=True)
+        # Then: sleep actual mining miners (low-power first to preserve S19s)
+        mining = sorted(
+            self.mining_miners,
+            key=lambda m: self._miner_power_map.get(m.ip, 0),
+        )
         for miner in mining:
             if trimmed >= count:
                 break
