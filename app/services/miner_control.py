@@ -141,7 +141,9 @@ async def _vnish_request(
                     return True, resp.json()
                 except Exception:
                     return True, resp.text
-            return False, None
+            # Non-200 but server responded — return status code so callers
+            # can distinguish "auth failed" from "connection refused".
+            return False, resp.status_code
     except Exception as e:
         logger.debug("vnish_request_failed", ip=ip, endpoint=endpoint, error=str(e))
         return False, None
@@ -374,7 +376,9 @@ async def poll_miner(miner: Miner) -> MinerState:
     ok, status_data = await _vnish_request(
         miner.ip, "/cgi-bin/get_miner_status.cgi", timeout=3.0
     )
-    vnish_reachable = ok  # Track whether web server responded at all
+    # Any HTTP response (including 401) means web server is alive.
+    # status_data is None only when connection failed entirely.
+    vnish_reachable = ok or status_data is not None
     if ok and status_data:
         if isinstance(status_data, dict):
             _parse_vnish_status(miner, status_data)
