@@ -26,7 +26,7 @@ Command funnel:  Maestro → SectionProcess → SectionManager → Miner
 import asyncio
 import math
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 import structlog
 
@@ -62,6 +62,9 @@ class Maestro:
         self._state: FleetState = FleetState.UNKNOWN
         self._target_power_kw: Optional[float] = None
         self._last_ems_command: Optional[datetime] = None
+
+        # Command history for dashboard
+        self._command_history: List[dict] = []
 
         # Lock for state changes (asyncio lock protects against concurrent EMS calls)
         self._lock = asyncio.Lock()
@@ -436,6 +439,26 @@ class Maestro:
                 if miner.get("ip") == ip:
                     return section
         return None
+
+    # ── Command History ───────────────────────────────────────────
+
+    def log_command(self, command: str, source: str, parameters: dict = None, success: bool = True, message: str = ""):
+        """Record a command in the history ring buffer."""
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "command": command,
+            "source": source,
+            "parameters": parameters or {},
+            "success": success,
+            "message": message,
+        }
+        self._command_history.append(entry)
+        if len(self._command_history) > 500:
+            self._command_history = self._command_history[-500:]
+
+    def get_command_history(self, limit: int = 20) -> List[dict]:
+        """Return most recent commands, newest first."""
+        return list(reversed(self._command_history[-limit:]))
 
     # ── Power Meter ───────────────────────────────────────────────
 

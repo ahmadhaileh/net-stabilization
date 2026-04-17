@@ -141,6 +141,7 @@ async def section_sleep_all(section_id: str):
     if not section:
         raise HTTPException(status_code=404, detail=f"Section {section_id} not found")
     section.deactivate()
+    maestro.log_command("section_sleep", "dashboard", {"section": section_id}, success=True)
     logger.info("section_sleep_all", section=section_id)
     return {"success": True, "message": f"Sleep command sent to {section_id}"}
 
@@ -153,6 +154,7 @@ async def section_wake_all(section_id: str):
     if not section:
         raise HTTPException(status_code=404, detail=f"Section {section_id} not found")
     section.set_target(section.rated_power_kw)
+    maestro.log_command("section_wake", "dashboard", {"section": section_id, "target_kw": round(section.rated_power_kw, 1)}, success=True)
     logger.info("section_wake_all", section=section_id, target_kw=section.rated_power_kw)
     return {"success": True, "message": f"Wake command sent to {section_id} (target: {section.rated_power_kw:.1f} kW)"}
 
@@ -177,6 +179,11 @@ async def control_miner(miner_id: str, request: ManualControlRequest):
 
     # Send command through the section process (funneled downward)
     section.control_miner(ip, request.action)
+    maestro.log_command(
+        request.action, "dashboard",
+        {"miner": ip, "section": section.section_id},
+        success=True,
+    )
 
     logger.info(
         "manual_miner_control",
@@ -271,3 +278,13 @@ async def get_miner_snapshots(miner_ip: str, hours: int = 24, limit: int = 1440)
     except Exception as e:
         logger.warning("miner_snapshots_error", error=str(e))
         return {"miner_ip": miner_ip, "snapshots": []}
+
+
+# ── Command History ───────────────────────────────────────────────
+
+@router.get("/history")
+async def get_command_history(limit: int = 20):
+    """Return recent command history for the dashboard."""
+    maestro = get_maestro()
+    commands = maestro.get_command_history(limit=limit)
+    return {"commands": commands}

@@ -170,6 +170,11 @@ async def activate(request: ActivateRequest):
         success, message = await maestro.activate(
             request.activation_power_in_kw
         )
+        maestro.log_command(
+            "activate", "ems",
+            {"power_kw": request.activation_power_in_kw},
+            success=success, message=message,
+        )
         
         if success:
             return CommandResponse(accepted=True, message=message)
@@ -249,6 +254,7 @@ async def deactivate(request: DeactivateRequest = None):
         logger.info("Deactivation request received")
         
         success, message = await maestro.deactivate()
+        maestro.log_command("deactivate", "ems", success=success, message=message)
         
         if success:
             return CommandResponse(accepted=True, message=message)
